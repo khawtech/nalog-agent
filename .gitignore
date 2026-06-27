@@ -8,3 +8,4 @@ coverage/
 dist/
 *.tgz
 *.zip
+public/
