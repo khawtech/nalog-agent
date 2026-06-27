@@ -1,0 +1,39 @@
+{
+  "name": "nalog-agent",
+  "version": "0.1.0",
+  "private": false,
+  "description": "MemoryAgent for smallholder rice & sugarcane farmers — a Qwen-powered agronomic agent with persistent, decaying, cross-session memory and human-in-the-loop irrigation control. Built on Alibaba Cloud (Model Studio, Function Compute, Tablestore, DashVector) on top of the NaLog / KhawTECH platform.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Alberto Roura (KhawTECH)",
+  "homepage": "https://khawtech.com",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "mcp": "node src/mcp/server.js",
+    "check": "node scripts/selfcheck.js",
+    "smoke:deploy": "node scripts/smoke-deployment.mjs",
+    "seed": "node scripts/seed-demo.js",
+    "provision": "node deploy/provision.js",
+    "deploy:build": "bash deploy/fc-zip-build.sh",
+    "deploy:fc": "node deploy/fc-deploy.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "nanoid": "^5.1.5",
+    "openai": "^4.104.0",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0",
+    "tablestore": "^5.6.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.0.0"
+  }
+}

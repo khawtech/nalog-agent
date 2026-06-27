@@ -1,0 +1,16 @@
+# Local development / demo. Everything runs in the container.
+#   docker compose build
+#   docker compose run --rm app npm run seed     # seed demo memory
+#   docker compose up                            # serve on http://localhost:8080
+services:
+  app:
+    build: .
+    image: nalog-agent:latest
+    env_file: .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATA_DIR: /app/data
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data

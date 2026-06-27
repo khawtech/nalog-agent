@@ -1,0 +1,8 @@
+#!/bin/bash
+# Function Compute custom runtime (Debian 10) entrypoint. This runtime bundles
+# Node.js 20 under /var/fc/lang/nodejs20 but does not add it to PATH, so we do.
+# FC runs /code/bootstrap to start the HTTP server, then probes the listening port.
+export PATH="/var/fc/lang/nodejs20/bin:${PATH}"
+export PORT="${PORT:-9000}"
+cd /code
+exec node src/index.js
