@@ -43,24 +43,7 @@ The NaLog Agent is the agronomist with perfect memory in every farmer's pocket. 
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    F["👨‍🌾 Farmer (Thai/English)<br/>Web chat"] --> API
-
-    subgraph AC["Alibaba Cloud"]
-        API["Function Compute 3.0<br/>(ZIP custom runtime, Node 20)"]
-        API --> QWEN["Model Studio — Qwen<br/>qwen-turbo / plus / max<br/>+ text-embedding-v3"]
-        API --> MEM
-        subgraph MEM["Memory"]
-            TS["Tablestore<br/>profile · episodic (TTL) · sessions · proposals"]
-            DV["DashVector<br/>semantic recall"]
-        end
-    end
-
-    API -->|read sensor data| NALOG["NaLog API<br/>(paddies, sensors, AWD cycles)"]
-    API -->|approved action| CS["ChirpStack<br/>LoRaWAN downlink"]
-    CS --> PUMP["💧 Pump node (ESP32 + LoRa)"]
-```
+![Architecture](docs/arch.png)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and the
 [3-tier memory model](docs/ARCHITECTURE.md#memory-model).
