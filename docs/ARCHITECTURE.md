@@ -7,30 +7,7 @@ and a human-in-the-loop irrigation control path over LoRaWAN.
 
 ## System diagram
 
-```mermaid
-flowchart TD
-    F["👨‍🌾 Farmer<br/>Web chat (Thai/English)"] -->|POST /api/chat| API
-
-    subgraph TH["Alibaba Cloud — Thailand / Bangkok (ap-southeast-7)"]
-        API["Function Compute 3.0<br/>Node 20 ZIP custom runtime<br/>Express + ReAct loop"]
-        TS["Tablestore<br/>• profile (sticky)<br/>• episodic (TTL decay)<br/>• sessions / messages<br/>• HITL proposals"]
-        API --> TS
-    end
-
-    subgraph SG["Alibaba Cloud — Singapore / global (not offered in ap-southeast-7)"]
-        QWEN["Model Studio (DashScope)<br/>qwen-turbo · qwen-plus · qwen-max<br/>text-embedding-v3"]
-        DV["DashVector<br/>semantic recall index"]
-    end
-
-    API -->|chat / tools / embeddings| QWEN
-    API -->|semantic recall| DV
-
-    API -->|read: paddies, sensors,<br/>AWD cycles, history| NALOG["NaLog REST API<br/>(KhawTECH platform)"]
-    API -->|approved pump action| CS["ChirpStack LNS"]
-    CS -->|LoRaWAN downlink<br/>0x01/0x00 fPort 1| PUMP["💧 ESP32 + LoRa pump node"]
-
-    F -->|approve / reject| API
-```
+![Architecture](arch.png)
 
 ## Request flow (one turn)
 
