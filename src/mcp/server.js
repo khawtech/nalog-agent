@@ -16,8 +16,15 @@ import { MemoryManager } from '../memory/memoryManager.js';
 import { getStore } from '../memory/store/index.js';
 import { handlers } from '../agent/tools.js';
 import { DEMO_FARMER } from '../integrations/demoData.js';
+import { farmerIdFromToken } from '../utils/jwt.js';
+import config from '../config.js';
 
-const FARMER_ID = process.env.MCP_FARMER_ID || DEMO_FARMER.farmerId;
+const nalogToken = config.nalog.authToken || null;
+const tokenFarmerId = farmerIdFromToken(nalogToken);
+// Real JWT → use the Firebase UID. Non-JWT / demo token → fall back to env or demo farmer.
+const FARMER_ID = (tokenFarmerId && !tokenFarmerId.startsWith('token-'))
+  ? tokenFarmerId
+  : (process.env.MCP_FARMER_ID || DEMO_FARMER.farmerId);
 
 export async function buildMcpServer() {
   const memory = await MemoryManager.create();
@@ -26,12 +33,14 @@ export async function buildMcpServer() {
   const server = new McpServer({ name: 'nalog-agent', version: '0.1.0' });
 
   // Each MCP call gets a fresh agent context bound to the configured farmer.
+  // nalogToken ensures NaLog API calls are scoped to the same user as memory.
   const newCtx = () => ({
     farmerId: FARMER_ID,
     sessionId: 'mcp',
     paddyId: null,
     memory,
     store,
+    nalogToken,
     createdProposals: [],
     recalledMemories: [],
   });

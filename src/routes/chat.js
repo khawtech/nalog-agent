@@ -19,10 +19,11 @@ export default function chatRoutes({ agent, memory, store }) {
   router.post('/api/chat', requireApiKey, async (req, res) => {
     const { sessionId, message, paddyId, farmId } = req.body || {};
     const nalogToken = extractNalogToken(req);
-    const farmerId =
-      req.body?.farmerId ||
-      farmerIdFromToken(nalogToken) ||
-      DEMO_FARMER.farmerId;
+    const tokenFarmerId = farmerIdFromToken(nalogToken);
+    if (req.body?.farmerId && tokenFarmerId && req.body.farmerId !== tokenFarmerId) {
+      logger.warn({ bodyFarmerId: req.body.farmerId, tokenFarmerId }, 'farmerId/token mismatch — using token');
+    }
+    const farmerId = tokenFarmerId || DEMO_FARMER.farmerId;
     if (!message || typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ error: 'message is required' });
     }
@@ -53,7 +54,8 @@ export default function chatRoutes({ agent, memory, store }) {
 
   // What the agent currently remembers (for the UI memory panel).
   router.get('/api/memory', requireApiKey, async (req, res) => {
-    const farmerId = req.query.farmerId || DEMO_FARMER.farmerId;
+    const nalogToken = extractNalogToken(req);
+    const farmerId = farmerIdFromToken(nalogToken) || req.query.farmerId || DEMO_FARMER.farmerId;
     const paddyId = req.query.paddyId || null;
     const [profile, memories] = await Promise.all([
       memory.getProfile(farmerId),
