@@ -165,7 +165,7 @@ Tests run in demo mode (no API keys, no external services needed) and cover:
 | **Routes** | Health endpoint, chat validation, proposal approve/reject lifecycle |
 | **Tools** | All 8 tool handlers, schema validation, round-trip memory |
 
-CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20 and 22.
+CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
 
 ## Dual-track rationale
 

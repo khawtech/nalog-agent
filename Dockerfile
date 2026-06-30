@@ -1,6 +1,6 @@
 # NaLog Agent — runs as an Alibaba Cloud Function Compute custom container,
-# or anywhere Docker runs. Node 22 LTS.
-FROM node:22-bookworm-slim
+# or anywhere Docker runs. Node 24 LTS.
+FROM node:24-bookworm-slim
 
 ENV NODE_ENV=production \
     PORT=8080

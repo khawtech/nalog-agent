@@ -3,8 +3,8 @@
 // custom runtime (custom.debian10, bundled Node 20) — no container image / ACR.
 //
 // Flow:
-//   1. Build Linux node_modules in the Node 22 Docker image (so native deps
-//      like `tablestore` match FC's Debian x86-64 runtime).
+//   1. Build Linux node_modules in the Node 20 Docker image (so native deps
+//      like `tablestore` match FC's bundled custom-runtime Node 20 on Debian x86-64).
 //   2. Assemble /code (src, public, scripts, deploy/bootstrap, package.json,
 //      node_modules) and zip it.
 //   3. base64 the zip into the FC CreateFunction/UpdateFunction `code.zipFile`.
