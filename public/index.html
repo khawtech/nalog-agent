@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NaLog Agent — KhawTECH MemoryAgent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="leaf">🌾</span>
+        <div>
+          <h1>NaLog Agent</h1>
+          <p>KhawTECH MemoryAgent · Qwen on Alibaba Cloud</p>
+        </div>
+      </div>
+      <div class="badges">
+        <span id="mode-badge" class="badge">…</span>
+        <span id="storage-badge" class="badge subtle">…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="chat-panel">
+        <div id="messages" class="messages"></div>
+
+        <div class="suggestions" id="suggestions">
+          <button data-q="สวัสดีครับ นาแปลง 3 ตอนนี้ต้องสูบน้ำไหม?">นาแปลง 3 ต้องสูบน้ำไหม? 🇹🇭</button>
+          <button data-q="What's the water level in Paddy 3 right now and what do you recommend?">Paddy 3 status 🇬🇧</button>
+          <button data-q="Should I irrigate the sugarcane field this week?">Sugarcane advice</button>
+        </div>
+
+        <form id="chat-form" class="composer">
+          <input
+            id="chat-input"
+            type="text"
+            autocomplete="off"
+            placeholder="Ask about your paddies… / ถามเรื่องนาของคุณได้เลย…"
+          />
+          <button type="submit" id="send-btn">Send</button>
+        </form>
+      </section>
+
+      <aside class="memory-panel">
+        <div class="memory-header">
+          <h2>🧠 What I remember</h2>
+          <button id="refresh-memory" title="Refresh">⟳</button>
+        </div>
+        <div class="memory-section">
+          <h3>Farmer profile</h3>
+          <ul id="profile-list" class="profile-list"></ul>
+        </div>
+        <div class="memory-section">
+          <h3>Field experience</h3>
+          <ul id="memory-list" class="memory-list"></ul>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
