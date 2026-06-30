@@ -1,19 +1,19 @@
 // Mint a Firebase ID token for integration smoke tests.
-// Uses the NaLog farming Firebase service account + web API key.
+// Set FIREBASE_SERVICE_ACCOUNT_PATH and FIREBASE_WEB_API_KEY (see .env.example).
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const farmingLocal = join(__dirname, '..', '..', 'nalog-farming', 'local');
+const localDir = process.env.FIREBASE_LOCAL_DIR || join(__dirname, '..', 'local');
 
 export async function getTestFirebaseToken(uid) {
   if (process.env.NALOG_TEST_TOKEN) return process.env.NALOG_TEST_TOKEN;
 
   const saPath =
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-    join(farmingLocal, 'firebase-service-account.json');
+    join(localDir, 'firebase-service-account.json');
   if (!existsSync(saPath)) return null;
 
   const apiKey =
@@ -22,7 +22,7 @@ export async function getTestFirebaseToken(uid) {
     '';
   if (!apiKey) throw new Error('FIREBASE_WEB_API_KEY or VITE_FIREBASE_API_KEY env var is required');
 
-  const require = createRequire(join(farmingLocal, 'package.json'));
+  const require = createRequire(join(__dirname, '..', 'package.json'));
   const admin = require('firebase-admin');
 
   const serviceAccount = JSON.parse(readFileSync(saPath, 'utf8'));
