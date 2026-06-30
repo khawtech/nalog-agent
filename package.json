@@ -20,7 +20,7 @@
     "provision": "node deploy/provision.js",
     "deploy:build": "bash deploy/fc-zip-build.sh",
     "deploy:fc": "node deploy/fc-deploy.mjs",
-    "test": "node --test"
+    "test": "NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= node --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
