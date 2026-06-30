@@ -4,7 +4,7 @@
 // resembles this situation?"). PROOF OF ALIBABA CLOUD: embeddings are computed
 // by Qwen text-embedding models on Model Studio.
 // ──────────────────────────────────────────────────────────────────────────
-import { client } from './dashscope.js';
+import { getClient } from './dashscope.js';
 import config from '../config.js';
 import logger from '../logger.js';
 
@@ -21,7 +21,7 @@ export async function embed(input) {
     logger.warn('DASHSCOPE_API_KEY missing — using deterministic local embeddings (dev only)');
     return cleaned.map((t) => pseudoEmbedding(t, config.dashscope.embeddingDim));
   }
-  const res = await client.embeddings.create({
+  const res = await getClient().embeddings.create({
     model: config.dashscope.embeddingModel,
     input: cleaned,
     dimensions: config.dashscope.embeddingDim,

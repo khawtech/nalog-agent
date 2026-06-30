@@ -14,10 +14,16 @@ import OpenAI from 'openai';
 import config from '../config.js';
 import logger from '../logger.js';
 
-const client = new OpenAI({
-  apiKey: config.dashscope.apiKey,
-  baseURL: config.dashscope.baseUrl,
-});
+let _client;
+function getClient() {
+  if (!_client) {
+    _client = new OpenAI({
+      apiKey: config.dashscope.apiKey || 'unused',
+      baseURL: config.dashscope.baseUrl,
+    });
+  }
+  return _client;
+}
 
 // Running token tally so we can report cost-awareness (a judged criterion).
 const usageTotals = { prompt: 0, completion: 0, total: 0, calls: 0 };
@@ -76,7 +82,7 @@ export async function chat({
 
   const started = Date.now();
   try {
-    const completion = await client.chat.completions.create(params);
+    const completion = await getClient().chat.completions.create(params);
     track(completion.usage);
     logger.debug(
       { model, tier, ms: Date.now() - started, usage: completion.usage },
@@ -115,4 +121,4 @@ export async function chatJSON(opts) {
   }
 }
 
-export { client };
+export { getClient };
