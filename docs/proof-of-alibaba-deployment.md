@@ -15,7 +15,8 @@ All language reasoning and natural-language generation is served by **Qwen** mod
 on **Alibaba Cloud Model Studio**, via the OpenAI-compatible endpoint
 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`.
 
-- **Client initialisation:** [`dashscope.js`](../src/llm/dashscope.js#L17-L20) — creates the OpenAI SDK client pointed at the DashScope international endpoint.
+- **Base URL (literal):** [`config.js`](../src/config.js#L21-L23) — the Qwen Cloud base URL `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` is defined here.
+- **Client initialisation:** [`dashscope.js`](../src/llm/dashscope.js#L17-L25) — creates the OpenAI SDK client pointed at the DashScope international endpoint.
 - **Model tiering:** [`resolveModel()`](../src/llm/dashscope.js#L37-L39) — `qwen-turbo` for cheap extraction, `qwen-plus` for chat, `qwen-max` for agronomic reasoning with tool calling.
 - **Chat completion:** [`chat()`](../src/llm/dashscope.js#L51-L90) — every LLM call resolves the model tier, calls `client.chat.completions.create()`, and tracks token usage.
 - **JSON extraction:** [`chatJSON()`](../src/llm/dashscope.js#L96-L116) — structured memory extraction with `response_format: { type: 'json_object' }`.

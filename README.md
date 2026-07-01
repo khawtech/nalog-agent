@@ -129,6 +129,15 @@ scoping.
 Full steps: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`deploy/fc-zip-build.sh`](deploy/fc-zip-build.sh)
 and [`deploy/fc-deploy.mjs`](deploy/fc-deploy.mjs).
 
+**Deploy-only dependencies** (not needed for local dev or tests):
+```bash
+npm install --no-save @alicloud/fc20230330 @alicloud/openapi-client @alicloud/tea-util
+```
+**Smoke-test dependencies** (only for `scripts/firebase-test-token.mjs`):
+```bash
+npm install --no-save firebase-admin
+```
+
 ## Use it from any MCP client
 
 The agent's capabilities are also exposed as a **Model Context Protocol (MCP) server** over
@@ -140,14 +149,15 @@ docker compose run --rm app npm run mcp          # serve MCP over stdio
 docker compose run --rm app node scripts/mcp-smoke.js   # verify with a real MCP client
 ```
 
-Tools exposed: `get_farm_overview`, `get_paddy_status`, `get_sensor_history`, `recall_memory`,
-`save_memory`, `propose_irrigation` (human-in-the-loop). Implementation:
+Tools exposed (all 8, same as the ReAct loop): `get_farm_overview`, `get_paddy_status`,
+`get_sensor_history`, `recall_memory`, `save_memory`, `update_profile`,
+`get_irrigation_history`, `propose_irrigation` (human-in-the-loop). Implementation:
 [`src/mcp/server.js`](src/mcp/server.js).
 
 ## Tests & CI
 
 ```bash
-npm test       # 64 tests (memory, store, vector, routes, tools, embeddings, crop calendar, demo data)
+npm test       # 70 tests (memory, store, vector, routes, tools, embeddings, crop calendar, demo data)
 npm run check  # boots app, hits endpoints
 ```
 
@@ -155,8 +165,9 @@ Tests run in demo mode (no API keys, no external services needed) and cover:
 
 | Area | Tests |
 |---|---|
-| **Memory** | 3-tier recall, reinforcement, profile, context building, decay |
-| **Store** | Profile CRUD, episodic listing, TTL expiry, proposal lifecycle |
+| **Memory** | 3-tier recall, reinforcement, profile, context building, decay, purge + vector cleanup |
+| **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, empty transcript and extraction failure handling |
+| **Store** | Profile CRUD, episodic listing, TTL expiry, purge returning removed IDs, proposal lifecycle |
 | **Vector** | Upsert/query/delete, filter, persistence, cosine ranking |
 | **Embeddings** | Cosine similarity, pseudo-embedding determinism, semantic ranking |
 | **Crop calendar** | Rice & sugarcane stages, irrigation recommendations |
@@ -165,7 +176,7 @@ Tests run in demo mode (no API keys, no external services needed) and cover:
 | **Routes** | Health endpoint, chat validation, proposal approve/reject lifecycle |
 | **Tools** | All 8 tool handlers, schema validation, round-trip memory |
 
-CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
+CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24 and includes `npm test`, `npm run check` (selfcheck), and `npm audit`. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
 
 ## Dual-track rationale
 
@@ -176,7 +187,10 @@ This project qualifies for **both** hackathon tracks:
 - Soft forgetting via recency decay (120-day half-life) + reinforcement on reuse
 - Hard forgetting via Tablestore TTL (~400 days physical deletion)
 - Top-K recall within a deliberately limited context window
-- Autonomous post-turn learning (cheap `qwen-turbo` pass extracts durable facts)
+- Autonomous post-turn learning (cheap `qwen-turbo` pass extracts durable facts) with
+  **deduplication**: exact text + semantic vector similarity prevents near-duplicate memories
+- **Memory lifecycle**: expired memories are purged from both store and vector index;
+  orphan vector entries (e.g. from Tablestore TTL) are cleaned lazily during recall
 - Cross-session, cross-season memory accumulation
 
 **Track 4 — Autopilot Agent**:
@@ -192,8 +206,8 @@ This project qualifies for **both** hackathon tracks:
 
 | Criterion | Where it shows up |
 |---|---|
-| **Technical Depth & Engineering (30%)** | Sophisticated Qwen use (model tiering turbo/plus/max, tool-calling, embeddings); **MCP server** exposing custom skills; a novel **3-tier decaying memory** (soft recency decay + reinforcement + hard Tablestore TTL) with rank-based, metric-agnostic semantic recall; 64 automated tests + CI. |
-| **Innovation & AI Creativity (30%)** | Modular, swappable storage/vector drivers; bounded ReAct loop with graceful degradation; Express 5 service; autonomous post-turn learning; token-budget discipline with per-turn reporting. |
+| **Technical Depth & Engineering (30%)** | Deliberate Qwen model tiering (`qwen-max` for tool-calling reasoning, `qwen-plus` for farmer-facing NLG, `qwen-turbo` for background memory extraction); **MCP server** exposing all 8 tools; a novel **3-tier decaying memory** (soft recency decay + reinforcement + hard Tablestore TTL) with rank-based, metric-agnostic semantic recall, deduplication, and memory lifecycle (purge + orphan vector cleanup); 70 automated tests + CI (selfcheck + audit). |
+| **Innovation & AI Creativity (30%)** | Modular, swappable storage/vector drivers; bounded ReAct loop with graceful degradation; Express 5 service; autonomous post-turn learning with semantic dedup; memory lifecycle management; token-budget discipline with per-turn reporting. |
 | **Problem Value & Impact (25%)** | **Production deployment** serving real farmers (Kut Chum, Yasothon) — water/diesel savings, methane reduction, food security for poor families; open-source (MIT), productizable across co-ops and SE Asia. |
 | **Presentation & Documentation (15%)** | Architecture diagram (Mermaid), per-turn token + recalled-memory visualisation in the UI, full docs (`README`, `docs/ARCHITECTURE.md`, `docs/proof-of-alibaba-deployment.md`), [blog post](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/). |
 
@@ -209,7 +223,7 @@ src/
   mcp/          MCP server exposing the agent tools over stdio
 public/         web chat UI (chat panel + memory panel + proposal approval cards)
 deploy/         Tablestore/DashVector provisioning, Function Compute deploy
-test/           64 automated tests (memory, store, vector, routes, tools, embeddings)
+test/           70 automated tests (memory, store, vector, routes, tools, embeddings)
 docs/           architecture, Alibaba proof, submission checklist
 ```
 

@@ -13,20 +13,28 @@ and a human-in-the-loop irrigation control path over LoRaWAN.
 
 1. **Load context** — fetch the farmer's profile + top-K relevant memories (semantic +
    recency + reinforcement), recent conversation, and a farm/paddy overview.
-2. **Reason** — `qwen-max` runs a tool-calling loop (up to 6 rounds):
+2. **Reason** — `qwen-max` (`reason` tier) runs a tool-calling loop (up to 6 rounds):
    `get_farm_overview`, `get_paddy_status`, `get_sensor_history`,
    `get_irrigation_history`, `recall_memory`, `save_memory`,
    `update_profile`, `propose_irrigation`.
-3. **Ground in real data** — irrigation advice must be based on actual sensor readings
+3. **Compose reply** — after tool rounds complete, `qwen-plus` (`chat` tier,
+   conversation-optimized, cheaper) generates the farmer-facing response from the tool
+   results. If no tools were needed, the `qwen-max` response is used directly.
+4. **Ground in real data** — irrigation advice must be based on actual sensor readings
    pulled from NaLog (or the bundled demo dataset).
-4. **Human-in-the-loop** — a pump action becomes a `proposal` (never executed directly).
-5. **Persist & learn** — the turn is saved; a cheap `qwen-turbo` pass extracts durable
-   profile facts and episodic learnings autonomously.
-6. **Act locally (on approval)** — approving a proposal enqueues a ChirpStack downlink.
+5. **Human-in-the-loop** — a pump action becomes a `proposal` (never executed directly).
+6. **Persist & learn** — the turn is saved; a cheap `qwen-turbo` (`router` tier) pass
+   extracts durable profile facts and episodic learnings autonomously, with
+   **deduplication** (exact text + semantic vector similarity) to prevent near-duplicate
+   memories.
+7. **Purge** — expired memories are removed from the store and their vector entries
+   deleted. For Tablestore, TTL handles row deletion; orphan vector entries are cleaned
+   lazily during recall.
+8. **Act locally (on approval)** — approving a proposal enqueues a ChirpStack downlink.
 
 ## MCP surface
 
-The core tool handlers are also exposed as a **Model Context Protocol (MCP) server** over
+All 8 tool handlers are also exposed as a **Model Context Protocol (MCP) server** over
 stdio ([`src/mcp/server.js`](../src/mcp/server.js)), built on `@modelcontextprotocol/sdk`.
 This lets external MCP clients (Claude Desktop, Cursor, other agents) read NaLog field state,
 query/append the farmer's memory, and prepare human-in-the-loop irrigation proposals — without
@@ -54,6 +62,17 @@ score = 0.60 · semantic_similarity      (DashVector cosine)
 - *soft* — old, unused memories sink in ranking and stop being recalled;
 - *hard* — Tablestore TTL physically deletes episodic rows after ~400 days unless rewritten.
 
+**Memory lifecycle** — expired memories are purged from the store (with their vector entries
+deleted in the same operation). For Tablestore, where TTL handles row deletion server-side,
+orphan vector entries are cleaned lazily during recall: any vector hit that no longer has a
+corresponding store row is deleted from the index.
+
+**Deduplication** — the autonomous post-turn learning pass (`learnFromConversation`) checks
+new memories against existing ones before inserting: exact text matches are reinforced
+instead of duplicated, and semantic near-duplicates (cosine similarity > 0.85) are
+reinforced instead of creating new entries. This prevents unbounded memory growth from
+repeated conversations about the same topic.
+
 **Limited context window** — recall is deliberately top-K (default 5) and summarised into a
 compact block, never a full memory dump. This is what makes it viable for offline-first,
 low-bandwidth rural deployments.
@@ -72,8 +91,14 @@ Cloud services.
 
 ## Token-budget discipline (a judged criterion)
 
-- **Model tiering**: `qwen-turbo` for cheap extraction/routing, `qwen-plus` for chat,
-  `qwen-max` only for the agronomic reasoning loop.
+- **Model tiering** (deliberate per-phase routing):
+  - `qwen-max` (`reason` tier) — tool-calling reasoning loop (the only phase that needs
+    function-calling capability and deep agronomic reasoning).
+  - `qwen-plus` (`chat` tier) — farmer-facing NLG after tool rounds complete
+    (conversation-optimized, cheaper). Also used as safety net if the loop exhausts
+    `MAX_TOOL_ROUNDS`.
+  - `qwen-turbo` (`router` tier) — background memory extraction
+    (`learnFromConversation`). Cheapest model, sufficient for structured JSON extraction.
 - **Summarised recall** rather than dumping raw history.
 - **Running token tally** surfaced per turn in the API response and the UI.
 
