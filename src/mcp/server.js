@@ -108,6 +108,34 @@ export async function buildMcpServer() {
   );
 
   register(
+    'update_profile',
+    {
+      title: 'Update farmer profile',
+      description: 'Update a durable fact about the farmer (e.g. preferred_language, irrigation_style).',
+      inputSchema: {
+        key: z.string().describe('Profile fact key (snake_case)'),
+        value: z.unknown().describe('Fact value'),
+        confidence: z.number().min(0).max(1).optional().describe('Confidence 0–1'),
+      },
+    },
+    'update_profile'
+  );
+
+  register(
+    'get_irrigation_history',
+    {
+      title: 'Irrigation history',
+      description: 'Get pump controls and irrigation events for a farm or paddy.',
+      inputSchema: {
+        farmId: z.string().optional().describe('Farm id (e.g. osVuZ2DjHwtc)'),
+        paddyId: z.string().optional().describe('Paddy id to scope results'),
+        hours: z.number().optional().describe('Lookback window in hours (default 720 = 30 days)'),
+      },
+    },
+    'get_irrigation_history'
+  );
+
+  register(
     'propose_irrigation',
     {
       title: 'Propose irrigation (human-in-the-loop)',

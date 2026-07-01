@@ -16,7 +16,7 @@ async function main() {
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  const expected = ['get_farm_overview', 'get_paddy_status', 'recall_memory', 'save_memory', 'propose_irrigation'];
+  const expected = ['get_farm_overview', 'get_paddy_status', 'get_sensor_history', 'recall_memory', 'save_memory', 'update_profile', 'get_irrigation_history', 'propose_irrigation'];
   expected.every((n) => names.includes(n))
     ? ok(`listTools → ${names.length} tools`)
     : fail('listTools', `missing some of ${expected.join(',')} (got ${names.join(',')})`);

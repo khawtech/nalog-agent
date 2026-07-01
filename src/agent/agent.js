@@ -133,8 +133,13 @@ export class AgentService {
 
       const toolCalls = assistant.tool_calls || [];
       if (toolCalls.length === 0) {
-        // No more tools requested — this is the final answer.
-        finalText = assistant.content || '';
+        if (toolTrace.length > 0) {
+          // Tool-based reasoning is done. Discard the qwen-max draft and let
+          // qwen-plus (conversation-optimized, cheaper) compose the farmer reply.
+          messages.pop();
+        } else {
+          finalText = assistant.content || '';
+        }
         break;
       }
 
@@ -165,13 +170,18 @@ export class AgentService {
     }
 
     if (!finalText) {
-      // Safety net: ask once more for a plain answer without tools.
+      // After tool rounds, compose the farmer reply with qwen-plus (conversation-
+      // optimized, cheaper). Also serves as safety net when the loop exhausts
+      // MAX_TOOL_ROUNDS without a text response.
       const wrap = await chat({ tier: 'chat', messages, temperature: 0.3 });
       finalText = wrap.content || 'ขออภัย ตอนนี้ระบบยังตอบไม่ได้ ลองใหม่อีกครั้งนะครับ';
     }
 
     // Reinforce memories the agent actually recalled this turn.
     await this.memory.reinforce(ctx.recalledMemories);
+
+    // Periodic cleanup of expired memories and their vector entries.
+    this.memory.purgeExpired().catch((err) => logger.warn({ err: err.message }, 'background purge failed'));
 
     // Persist the turn.
     const now = new Date().toISOString();

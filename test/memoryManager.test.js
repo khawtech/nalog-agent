@@ -53,3 +53,75 @@ test('buildContext summarises profile and memories', async () => {
   assert.match(ctx.text, /preferred_language/);
   assert.match(ctx.text, /manual approval/);
 });
+
+test('learnFromConversation extracts and stores memories', async () => {
+  const mm = await makeManager();
+  const mockExtract = async () => ({
+    profileFacts: [{ key: 'preferred_language', value: 'th', confidence: 0.9 }],
+    episodic: [{ type: 'observation', text: 'Paddy 3 drains fast after levelling' }],
+  });
+  const result = await mm.learnFromConversation(
+    { farmerId: 'f1', paddyId: 'p1', transcript: 'Farmer: my field drains quickly\nAgent: noted' },
+    mockExtract
+  );
+  assert.equal(result.profileFacts.length, 1);
+  assert.equal(result.episodic.length, 1);
+
+  const profile = await mm.getProfile('f1');
+  assert.equal(profile.preferred_language.value, 'th');
+
+  const memories = await mm.recall({ farmerId: 'f1', query: 'drain', limit: 5 });
+  assert.equal(memories.length, 1);
+  assert.ok(memories[0].text.includes('drains'));
+});
+
+test('learnFromConversation deduplicates near-identical memories', async () => {
+  const mm = await makeManager();
+  const mockExtract = async () => ({
+    profileFacts: [],
+    episodic: [{ type: 'observation', text: 'Paddy 3 drains fast after levelling' }],
+  });
+  await mm.learnFromConversation({ farmerId: 'f1', paddyId: 'p1', transcript: 'turn 1' }, mockExtract);
+  const result = await mm.learnFromConversation({ farmerId: 'f1', paddyId: 'p1', transcript: 'turn 2' }, mockExtract);
+
+  assert.equal(result.episodic.length, 0, 'duplicate should be reinforced, not re-created');
+
+  const memories = await mm.recall({ farmerId: 'f1', query: 'drain', limit: 10 });
+  assert.equal(memories.length, 1, 'only one memory should exist');
+  assert.ok(memories[0].reinforcement >= 1, 'existing memory should be reinforced');
+});
+
+test('learnFromConversation handles empty transcript', async () => {
+  const mm = await makeManager();
+  const result = await mm.learnFromConversation({ farmerId: 'f1', transcript: '' });
+  assert.deepEqual(result, { profileFacts: [], episodic: [] });
+});
+
+test('learnFromConversation handles extraction failure', async () => {
+  const mm = await makeManager();
+  const failExtract = async () => { throw new Error('API down'); };
+  const result = await mm.learnFromConversation({ farmerId: 'f1', transcript: 'some talk' }, failExtract);
+  assert.deepEqual(result, { profileFacts: [], episodic: [] });
+});
+
+test('purgeExpired removes expired memories and their vectors', async () => {
+  const dir = tmp();
+  const store = await new LocalStore(dir).init();
+  const vector = await new LocalVector(dir).init();
+  const mm = new MemoryManager(store, vector);
+
+  await mm.recordEpisodic({
+    farmerId: 'f1',
+    type: 'observation',
+    text: 'this will expire',
+    ttlDays: -1,
+  });
+
+  assert.equal(Object.keys(store.db.episodic).length, 1);
+  assert.equal(vector.docs.size, 1);
+
+  const count = await mm.purgeExpired();
+  assert.equal(count, 1);
+  assert.equal(Object.keys(store.db.episodic).length, 0);
+  assert.equal(vector.docs.size, 0);
+});

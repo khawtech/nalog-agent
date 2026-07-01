@@ -188,9 +188,10 @@ export default class TablestoreStore {
     return memory;
   }
 
-  // Tablestore TTL handles physical deletion; nothing to do at runtime.
+  // Tablestore TTL handles physical deletion; vector cleanup is done lazily
+  // during recall (see MemoryManager) when orphan entries are detected.
   async purgeExpired() {
-    return 0;
+    return [];
   }
 
   // ── Sessions & messages ────────────────────────────────────────────────────

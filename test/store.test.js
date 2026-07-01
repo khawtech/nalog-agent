@@ -39,6 +39,33 @@ test('episodic listing filters expired and by paddy', async () => {
   assert.equal(p1[0].memoryId, 'm1');
 });
 
+test('purgeExpired returns removed memory IDs', async () => {
+  const store = await new LocalStore(tmpDir()).init();
+  const now = new Date().toISOString();
+  await store.putEpisodic({
+    memoryId: 'expired1',
+    farmerId: 'f1',
+    text: 'old',
+    createdAt: now,
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  await store.putEpisodic({
+    memoryId: 'valid1',
+    farmerId: 'f1',
+    text: 'fresh',
+    createdAt: now,
+  });
+
+  const removed = await store.purgeExpired();
+  assert.ok(Array.isArray(removed));
+  assert.equal(removed.length, 1);
+  assert.equal(removed[0], 'expired1');
+
+  const remaining = await store.listEpisodic('f1');
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].memoryId, 'valid1');
+});
+
 test('proposals lifecycle', async () => {
   const store = await new LocalStore(tmpDir()).init();
   await store.putProposal({ proposalId: 'x1', sessionId: 's1', status: 'pending', createdAt: new Date().toISOString() });

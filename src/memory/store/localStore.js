@@ -82,14 +82,14 @@ export default class LocalStore {
 
   async purgeExpired() {
     const now = Date.now();
-    let removed = 0;
+    const removed = [];
     for (const [id, m] of Object.entries(this.db.episodic)) {
       if (m.expiresAt && new Date(m.expiresAt).getTime() < now) {
         delete this.db.episodic[id];
-        removed += 1;
+        removed.push(id);
       }
     }
-    if (removed) this.#flush();
+    if (removed.length) this.#flush();
     return removed;
   }
 
