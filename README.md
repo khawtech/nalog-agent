@@ -18,11 +18,10 @@
 > bundled dataset so anyone can run it locally — but the production path is already
 > deployed and handling real conversations, real sensors, and real pump commands.
 
-**Hackathon track:** **Track 1 — MemoryAgent** + **Track 4 — Autopilot Agent**
-(dual-track: the 3-tier decaying memory system fulfils Track 1, while the autonomous
-`POST /api/alerts` webhook — sensor alert → unprompted agronomic reasoning →
-human-in-the-loop pump approval → LoRaWAN downlink to the field — satisfies Track 4's
-production workflow criteria. See [Dual-track rationale](#dual-track-rationale) below.)
+**Hackathon track:** **Track 1 — MemoryAgent** (primary submission). The same codebase
+also includes an autonomous sensor-alert webhook (`POST /api/alerts`) that *could* qualify
+for Track 4 — Autopilot Agent, but this project is entered as a MemoryAgent. See
+[Track 1 rationale](#track-1-rationale) below.
 
 > **Built by [Alberto Roura](https://albertoroura.com)** — **Alibaba Cloud MVP for 8
 > consecutive years (2018–2026)** and **Alibaba Cloud MVP of the Year 2019** (awarded
@@ -108,7 +107,7 @@ The agent reads the (demo) sensor trend, recalls past experience, and — if a p
 makes sense — shows an **approval card**. Approving it sends the LoRaWAN downlink (simulated
 unless `CHIRPSTACK_*` is configured).
 
-Simulate the autonomous Track-4 path (sensor alert → unprompted agent turn → proposal):
+Simulate the autonomous alert path (sensor alert → unprompted agent turn → proposal):
 
 ```bash
 curl -X POST http://localhost:8080/api/alerts -H 'Content-Type: application/json' \
@@ -201,11 +200,10 @@ many stale memories into the context.
 
 CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24 and includes `npm test`, `npm run check` (selfcheck), the MCP client smoke test, and `npm audit`. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
 
-## Dual-track rationale
+## Track 1 rationale
 
-This project qualifies for **both** hackathon tracks:
+This project is submitted to **Track 1 — MemoryAgent**:
 
-**Track 1 — MemoryAgent** (primary):
 - 3-tier memory (profile / episodic / semantic) with explicit relevance scoring,
   **benchmarked** on a labeled dataset ([docs/BENCHMARK.md](docs/BENCHMARK.md))
 - Vector-first recall (DashVector candidates → Tablestore point lookups →
@@ -219,16 +217,10 @@ This project qualifies for **both** hackathon tracks:
   orphan vector entries (e.g. from Tablestore TTL) are cleaned lazily during recall
 - Cross-session, cross-season memory accumulation
 
-**Track 4 — Autopilot Agent**:
-- End-to-end automation of a real business workflow, **with an autonomous trigger**:
-  `POST /api/alerts` (sensor threshold breach) → unprompted agronomic reasoning over
-  live field data → irrigation proposal → human-in-the-loop approval → LoRaWAN pump
-  command to the physical field
-- Handles ambiguous inputs (Thai/English, any phrasing, field photos)
-- Invokes external tools (NaLog API, ChirpStack, Qwen-VL)
-- Human-in-the-loop checkpoints at the critical decision point (pump control), with
-  per-farmer ownership enforcement
-- **Production-ready and deployed** — not a toy demo
+**Could also qualify for Track 4 — Autopilot Agent** (not submitted under that track):
+the `POST /api/alerts` webhook runs an end-to-end workflow — sensor threshold breach →
+unprompted agronomic reasoning over live field data → irrigation proposal →
+human-in-the-loop approval → LoRaWAN pump command — but the hackathon entry is MemoryAgent-first.
 
 ## How this maps to the judging criteria
 
