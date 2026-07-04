@@ -6,7 +6,43 @@
 import { nanoid } from 'nanoid';
 import * as nalog from '../integrations/nalog.js';
 import { buildCropCalendar } from '../integrations/cropCalendar.js';
+import { chat } from '../llm/dashscope.js';
 import logger from '../logger.js';
+
+/**
+ * Analyze a field photo with the Qwen-VL vision tier (Model Studio).
+ * Used by the chat route for farmer-attached photos and exposed as the
+ * analyze_field_photo tool for URL-based images (ReAct loop + MCP).
+ * @returns {Promise<string>} agronomic analysis text
+ */
+export async function analyzeFieldPhoto({ imageUrl, question }, { chatFn = chat, usage } = {}) {
+  if (!imageUrl) throw new Error('imageUrl is required');
+  const message = await chatFn({
+    tier: 'vision',
+    temperature: 0.2,
+    enableThinking: false,
+    usage,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are an expert agronomist looking at a photo from a smallholder rice or sugarcane ' +
+          'field in Isan, Thailand. Describe only what is visible and agronomically relevant: ' +
+          'crop type and growth stage, standing water / soil dryness, leaf colour (nitrogen or ' +
+          'disease signals), pests, weeds, lodging, and anything unusual. Be concise (≤120 words), ' +
+          'factual, and say clearly when something cannot be judged from the photo.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: imageUrl } },
+          { type: 'text', text: question?.trim() || 'Analyze this field photo.' },
+        ],
+      },
+    ],
+  });
+  return message.content || '';
+}
 
 export const toolDefinitions = [
   {
@@ -110,6 +146,22 @@ export const toolDefinitions = [
           paddyId: { type: 'string', description: 'Optional — scope to one paddy' },
           hours: { type: 'number', description: 'Lookback window for recent events list (default 720 = 30 days). lastWatering is always the most recent ever returned.' },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'analyze_field_photo',
+      description:
+        'Analyze a photo of a paddy/field with the Qwen vision model (crop condition, water, pests, weeds). Only use when the farmer provided a photo URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          imageUrl: { type: 'string', description: 'http(s) URL of the field photo' },
+          question: { type: 'string', description: 'What to look for, optional' },
+        },
+        required: ['imageUrl'],
       },
     },
   },
@@ -243,6 +295,14 @@ export const handlers = {
   async update_profile({ key, value, confidence }, ctx) {
     await ctx.memory.setProfileFact(ctx.farmerId, key, value, confidence ?? 0.8);
     return { updated: true, key };
+  },
+
+  async analyze_field_photo({ imageUrl, question }, _ctx) {
+    if (!/^https?:\/\//.test(imageUrl || '')) {
+      return { error: 'imageUrl must be an http(s) URL' };
+    }
+    const analysis = await analyzeFieldPhoto({ imageUrl, question });
+    return { analysis };
   },
 
   async propose_irrigation({ paddyId, action, reason }, ctx) {

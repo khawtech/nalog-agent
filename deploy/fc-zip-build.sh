@@ -5,8 +5,8 @@
 # Produces dist/nalog-agent-fc.zip containing:
 #   src/ public/ scripts/ deploy/bootstrap package.json package-lock.json node_modules/
 #
-# node_modules is installed inside the Node 22 Debian image so native deps
-# (e.g. tablestore) match FC's custom.debian12 x86-64 runtime.
+# node_modules is installed inside the Node 20 Debian image so native deps
+# (e.g. tablestore) match FC's custom.debian10 x86-64 runtime (bundled Node 20).
 #
 # Usage: ./deploy/fc-zip-build.sh
 # ──────────────────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ mkdir -p "${STAGE_DIR}/deploy"
 cp deploy/bootstrap "${STAGE_DIR}/deploy/bootstrap"
 chmod 755 "${STAGE_DIR}/deploy/bootstrap"
 
-# Match FC custom.debian12's bundled Node.js (nodejs20) so native deps line up.
+# Match FC custom.debian10's bundled Node.js (nodejs20) so native deps line up.
 echo "▶ Installing production node_modules for linux/amd64 (Node 20 Debian)"
 docker run --rm --platform linux/amd64 \
   -v "$(pwd)/${STAGE_DIR}:/app" -w /app \

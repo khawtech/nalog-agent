@@ -18,6 +18,7 @@ import { getStore } from './store/index.js';
 import { getVectorStore } from './vector/index.js';
 import { embedOne } from '../llm/embeddings.js';
 import { chatJSON } from '../llm/dashscope.js';
+import { rerank } from '../llm/rerank.js';
 import config from '../config.js';
 import logger from '../logger.js';
 
@@ -91,37 +92,79 @@ export class MemoryManager {
 
   /**
    * Retrieve the most relevant memories for the current situation.
+   *
+   * Vector-first: with a query we ask the vector index for candidate ids and
+   * hydrate only those rows via point lookups (BatchGetRow on Tablestore) —
+   * recall cost stays O(topK) regardless of how many seasons of memories a
+   * farmer has accumulated. Candidates are then re-ordered by the qwen3-rerank
+   * cross-encoder (when available) before the decay/reinforcement blend.
+   *
+   * Semantic leg uses RANK, not raw scores: DashVector cosine returns a
+   * distance (smaller = closer), the local index a similarity — rank is robust
+   * to either: best hit → 1.0, decreasing toward 0.
+   *
    * @returns {Promise<Array<memory & {score:number, semantic:number}>>}
    */
   async recall({ farmerId, paddyId = null, query = '', limit = 5 }) {
-    const allMemories = await this.store.listEpisodic(farmerId);
-    const memories = paddyId
-      ? allMemories.filter((m) => !m.paddyId || m.paddyId === paddyId)
-      : allMemories;
-    if (memories.length === 0) return [];
-
+    let candidates = [];
     const semanticById = new Map();
-    let vectorHits = [];
+
     if (query) {
+      let vectorHits = [];
       try {
         const qvec = await embedOne(query);
-        vectorHits = await this.vector.query(qvec, { topK: limit * 4, filter: { farmerId } });
-        // Use RANK, not the raw score: both adapters return best-first, but the
-        // numeric score differs by metric (DashVector cosine returns a distance
-        // where smaller is closer; local returns similarity). Rank is robust to
-        // either: best hit → 1.0, decreasing toward 0.
-        const denom = Math.max(vectorHits.length, 1);
-        vectorHits.forEach((h, i) => semanticById.set(h.id, 1 - i / denom));
+        vectorHits = await this.vector.query(qvec, {
+          topK: Math.max(limit * 4, 12),
+          filter: { farmerId },
+        });
       } catch (err) {
         logger.warn({ err: err.message }, 'semantic query failed, ranking by recency only');
       }
+
+      if (vectorHits.length > 0) {
+        const ids = vectorHits.map((h) => h.id);
+        candidates = await this.store.getEpisodicByIds(farmerId, ids);
+
+        // Lazy vector cleanup: remove entries whose store rows no longer exist
+        // (e.g. physically deleted by Tablestore TTL).
+        const liveIds = new Set(candidates.map((m) => m.memoryId));
+        const orphanIds = ids.filter((id) => !liveIds.has(id));
+        if (orphanIds.length > 0) {
+          Promise.all(orphanIds.map((id) => this.vector.delete(id).catch(() => {})))
+            .then(() => logger.debug({ count: orphanIds.length }, 'cleaned up orphan vector entries'));
+        }
+
+        // Semantic ordering: cross-encoder rerank when available, else the
+        // vector index order.
+        const reranked = await rerank(query, candidates.map((m) => m.text || ''));
+        if (reranked) {
+          const denom = Math.max(reranked.length, 1);
+          reranked.forEach((r, i) =>
+            semanticById.set(candidates[r.index]?.memoryId, 1 - i / denom)
+          );
+        } else {
+          const denom = Math.max(ids.length, 1);
+          ids.forEach((id, i) => semanticById.set(id, 1 - i / denom));
+        }
+      } else {
+        // No vector hits (fresh index, embed failure) — degrade gracefully to
+        // the farmer's stored memories ranked by recency/reinforcement.
+        candidates = await this.store.listEpisodic(farmerId);
+      }
+    } else {
+      candidates = await this.store.listEpisodic(farmerId);
     }
+
+    const memories = paddyId
+      ? candidates.filter((m) => !m.paddyId || m.paddyId === paddyId)
+      : candidates;
+    if (memories.length === 0) return [];
 
     const scored = memories.map((m) => {
       const semantic = semanticById.get(m.memoryId) ?? 0;
       const recency = recencyFactor(m.createdAt);
       const reinforcement = Math.min((m.reinforcement || 0) / 5, 1);
-      const score = query
+      const score = query && semanticById.size > 0
         ? WEIGHTS.semantic * semantic + WEIGHTS.recency * recency + WEIGHTS.reinforcement * reinforcement
         : 0.7 * recency + 0.3 * reinforcement;
       return { ...m, semantic, score };
@@ -130,17 +173,6 @@ export class MemoryManager {
     scored.sort((a, b) => b.score - a.score);
     const top = scored.slice(0, limit);
     await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
-
-    // Lazy vector cleanup: remove entries whose store rows no longer exist
-    // (e.g. physically deleted by Tablestore TTL).
-    if (vectorHits.length > 0) {
-      const storeIds = new Set(allMemories.map((m) => m.memoryId));
-      const orphanIds = vectorHits.filter((h) => !storeIds.has(h.id)).map((h) => h.id);
-      if (orphanIds.length > 0) {
-        Promise.all(orphanIds.map((id) => this.vector.delete(id).catch(() => {})))
-          .then(() => logger.debug({ count: orphanIds.length }, 'cleaned up orphan vector entries'));
-      }
-    }
 
     return top;
   }

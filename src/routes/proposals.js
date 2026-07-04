@@ -2,27 +2,34 @@ import { Router } from 'express';
 import config from '../config.js';
 import logger from '../logger.js';
 import { sendPumpCommand } from '../integrations/chirpstack.js';
-import { requireApiKey } from '../middleware/auth.js';
+import { requireApiKey, authenticateFarmer } from '../middleware/auth.js';
+
+// A pump proposal may only be seen/decided by the farmer it belongs to.
+function ownsProposal(req, proposal) {
+  return !proposal.farmerId || proposal.farmerId === req.farmer.farmerId;
+}
 
 export default function proposalRoutes({ store, memory }) {
   const router = Router();
 
-  router.get('/api/proposals', requireApiKey, async (req, res) => {
+  router.get('/api/proposals', requireApiKey, authenticateFarmer, async (req, res) => {
     const { sessionId, status } = req.query;
     const proposals = await store.listProposals({ sessionId, status });
-    res.json({ proposals });
+    res.json({ proposals: proposals.filter((p) => ownsProposal(req, p)) });
   });
 
-  router.get('/api/proposals/:id', requireApiKey, async (req, res) => {
+  router.get('/api/proposals/:id', requireApiKey, authenticateFarmer, async (req, res) => {
     const proposal = await store.getProposal(req.params.id);
     if (!proposal) return res.status(404).json({ error: 'proposal not found' });
+    if (!ownsProposal(req, proposal)) return res.status(403).json({ error: 'not your proposal' });
     res.json(proposal);
   });
 
   // Human-in-the-loop APPROVE → enqueue the LoRa downlink to the pump.
-  router.post('/api/proposals/:id/approve', requireApiKey, async (req, res) => {
+  router.post('/api/proposals/:id/approve', requireApiKey, authenticateFarmer, async (req, res) => {
     const proposal = await store.getProposal(req.params.id);
     if (!proposal) return res.status(404).json({ error: 'proposal not found' });
+    if (!ownsProposal(req, proposal)) return res.status(403).json({ error: 'not your proposal' });
     if (proposal.status !== 'pending') {
       return res.status(409).json({ error: `proposal already ${proposal.status}` });
     }
@@ -56,9 +63,10 @@ export default function proposalRoutes({ store, memory }) {
     }
   });
 
-  router.post('/api/proposals/:id/reject', requireApiKey, async (req, res) => {
+  router.post('/api/proposals/:id/reject', requireApiKey, authenticateFarmer, async (req, res) => {
     const proposal = await store.getProposal(req.params.id);
     if (!proposal) return res.status(404).json({ error: 'proposal not found' });
+    if (!ownsProposal(req, proposal)) return res.status(403).json({ error: 'not your proposal' });
     if (proposal.status !== 'pending') {
       return res.status(409).json({ error: `proposal already ${proposal.status}` });
     }

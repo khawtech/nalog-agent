@@ -22,13 +22,32 @@ const config = {
       process.env.DASHSCOPE_BASE_URL ||
       'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     models: {
-      router: process.env.MODEL_ROUTER || 'qwen-turbo',
-      chat: process.env.MODEL_CHAT || 'qwen-plus',
-      reason: process.env.MODEL_REASON || 'qwen-max',
+      router: process.env.MODEL_ROUTER || 'qwen3.6-flash',
+      chat: process.env.MODEL_CHAT || 'qwen3.6-plus',
+      reason: process.env.MODEL_REASON || 'qwen3.7-max',
+      vision: process.env.MODEL_VISION || 'qwen3-vl-plus',
     },
+    // Qwen hybrid-thinking policy: which tiers keep thinking mode enabled.
+    // Default: only the reason tier (deep agronomic tool-use) thinks; the
+    // chat/router tiers disable it to keep replies fast and cheap.
+    thinkingTiers: (process.env.QWEN_THINKING_TIERS ?? 'reason')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    // NOTE: embeddings deliberately stay on text-embedding-v3 — the production
+    // DashVector collection was built in that vector space; changing models
+    // would require a full re-embed migration of every farmer's memories.
     embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-v3',
     embeddingDim: int(process.env.EMBEDDING_DIM, 1024),
+    // DashScope semantic reranker for memory recall. Empty string disables.
+    rerankModel: process.env.RERANK_MODEL ?? 'qwen3-rerank',
     maxTokensPerTurn: int(process.env.MAX_TOKENS_PER_TURN, 6000),
+  },
+
+  firebase: {
+    // When set, X-NaLog-Token Firebase ID tokens are cryptographically
+    // verified (signature + iss + aud + exp) before trusting the uid.
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
   },
 
   storage: {

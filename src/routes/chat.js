@@ -1,61 +1,117 @@
 import { Router } from 'express';
-import { DEMO_FARMER } from '../integrations/demoData.js';
-import { requireApiKey } from '../middleware/auth.js';
-import { farmerIdFromToken } from '../utils/jwt.js';
+import config from '../config.js';
+import { requireApiKey, authenticateFarmer } from '../middleware/auth.js';
 import logger from '../logger.js';
 
-function extractNalogToken(req) {
-  return (
-    req.headers['x-nalog-token'] ||
-    req.headers['X-NaLog-Token'] ||
-    ''
-  );
+const MAX_IMAGE_CHARS = 6 * 1024 * 1024; // ~4.5MB binary as base64 data URL
+
+function validateImage(image) {
+  if (!image) return null;
+  if (typeof image !== 'string' || image.length > MAX_IMAGE_CHARS) {
+    return 'image must be a data: or http(s) URL under 6MB';
+  }
+  if (!/^data:image\/(png|jpe?g|webp|gif);base64,/.test(image) && !/^https?:\/\//.test(image)) {
+    return 'image must be a base64 data URL or an http(s) URL';
+  }
+  return null;
+}
+
+function sseWrite(res, event, data) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 export default function chatRoutes({ agent, memory, store }) {
   const router = Router();
 
-  // Main conversational endpoint.
-  router.post('/api/chat', requireApiKey, async (req, res) => {
-    const { sessionId, message, paddyId, farmId } = req.body || {};
-    const nalogToken = extractNalogToken(req);
-    const tokenFarmerId = farmerIdFromToken(nalogToken);
-    if (req.body?.farmerId && tokenFarmerId && req.body.farmerId !== tokenFarmerId) {
-      logger.warn({ bodyFarmerId: req.body.farmerId, tokenFarmerId }, 'farmerId/token mismatch — using token');
+  // Main conversational endpoint. Set body.stream=true (or Accept:
+  // text/event-stream) for live SSE: session → thinking → tool/tool_result →
+  // proposal → delta* → final.
+  router.post('/api/chat', requireApiKey, authenticateFarmer, async (req, res) => {
+    const { sessionId, message, paddyId, farmId, image } = req.body || {};
+    const farmerId = req.farmer.farmerId;
+    if (req.body?.farmerId && req.body.farmerId !== farmerId) {
+      logger.warn(
+        { bodyFarmerId: req.body.farmerId, farmerId },
+        'farmerId in body ignored — identity comes from the token'
+      );
     }
-    const farmerId = tokenFarmerId || DEMO_FARMER.farmerId;
-    if (!message || typeof message !== 'string' || !message.trim()) {
+
+    const hasText = typeof message === 'string' && message.trim();
+    if (!hasText && !image) {
       return res.status(400).json({ error: 'message is required' });
     }
-    if (message.length > 4000) {
+    if (hasText && message.length > 4000) {
       return res.status(400).json({ error: 'message too long' });
     }
+    const imageError = validateImage(image);
+    if (imageError) return res.status(400).json({ error: imageError });
+
+    const wantStream =
+      req.body?.stream === true || (req.headers.accept || '').includes('text/event-stream');
+
+    const runOpts = {
+      sessionId,
+      farmerId,
+      paddyId,
+      farmId,
+      userText: hasText ? message : '',
+      imageUrl: image || null,
+      nalogToken: req.farmer.token,
+    };
+
+    if (!wantStream) {
+      try {
+        const result = await agent.run(runOpts);
+        return res.json(result);
+      } catch (err) {
+        logger.error({ err: err.message }, 'chat failed');
+        return res.status(500).json({ error: 'agent failed to respond' });
+      }
+    }
+
+    // ── SSE streaming ──
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
     try {
       const result = await agent.run({
-        sessionId,
-        farmerId,
-        paddyId,
-        farmId,
-        userText: message,
-        nalogToken: nalogToken || null,
+        ...runOpts,
+        onEvent: (event) => sseWrite(res, event.type, event),
       });
-      res.json(result);
+      sseWrite(res, 'final', result);
     } catch (err) {
-      logger.error({ err: err.message }, 'chat failed');
-      res.status(500).json({ error: 'agent failed to respond' });
+      logger.error({ err: err.message }, 'chat (stream) failed');
+      sseWrite(res, 'error', { error: 'agent failed to respond' });
     }
+    res.end();
   });
 
-  // Conversation history for a session.
-  router.get('/api/session/:sessionId/messages', requireApiKey, async (req, res) => {
-    const msgs = await store.getMessages(req.params.sessionId, 50);
-    res.json({ sessionId: req.params.sessionId, messages: msgs });
-  });
+  // Conversation history for a session (owner only).
+  router.get(
+    '/api/session/:sessionId/messages',
+    requireApiKey,
+    authenticateFarmer,
+    async (req, res) => {
+      const session = await store.getSession(req.params.sessionId);
+      if (session && session.farmerId && session.farmerId !== req.farmer.farmerId) {
+        return res.status(403).json({ error: 'not your session' });
+      }
+      const msgs = await store.getMessages(req.params.sessionId, 50);
+      res.json({ sessionId: req.params.sessionId, messages: msgs });
+    }
+  );
 
-  // What the agent currently remembers (for the UI memory panel).
-  router.get('/api/memory', requireApiKey, async (req, res) => {
-    const nalogToken = extractNalogToken(req);
-    const farmerId = farmerIdFromToken(nalogToken) || req.query.farmerId || DEMO_FARMER.farmerId;
+  // What the agent currently remembers (for the UI memory panel). The farmer
+  // id always comes from the authenticated identity; the ?farmerId override
+  // only works in demo mode (used by the local selfcheck).
+  router.get('/api/memory', requireApiKey, authenticateFarmer, async (req, res) => {
+    const demoOverride = config.nalog.useDemo || !config.nalog.apiUrl;
+    const farmerId =
+      demoOverride && req.query.farmerId ? req.query.farmerId : req.farmer.farmerId;
     const paddyId = req.query.paddyId || null;
     const [profile, memories] = await Promise.all([
       memory.getProfile(farmerId),
@@ -72,6 +128,7 @@ export default function chatRoutes({ agent, memory, store }) {
         paddyId: m.paddyId,
         type: m.type,
         text: m.text,
+        reinforcement: m.reinforcement || 0,
       })),
     });
   });

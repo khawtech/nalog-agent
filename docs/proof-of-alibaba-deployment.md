@@ -15,13 +15,15 @@ All language reasoning and natural-language generation is served by **Qwen** mod
 on **Alibaba Cloud Model Studio**, via the OpenAI-compatible endpoint
 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`.
 
-- **Base URL (literal):** [`config.js`](../src/config.js#L21-L23) — the Qwen Cloud base URL `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` is defined here.
-- **Client initialisation:** [`dashscope.js`](../src/llm/dashscope.js#L17-L25) — creates the OpenAI SDK client pointed at the DashScope international endpoint.
-- **Model tiering:** [`resolveModel()`](../src/llm/dashscope.js#L37-L39) — `qwen-turbo` for cheap extraction, `qwen-plus` for chat, `qwen-max` for agronomic reasoning with tool calling.
-- **Chat completion:** [`chat()`](../src/llm/dashscope.js#L51-L90) — every LLM call resolves the model tier, calls `client.chat.completions.create()`, and tracks token usage.
-- **JSON extraction:** [`chatJSON()`](../src/llm/dashscope.js#L96-L116) — structured memory extraction with `response_format: { type: 'json_object' }`.
-- **Token accounting:** [`usageTotals` / `track()` / `getUsageTotals()`](../src/llm/dashscope.js#L22-L35) — running tally of prompt/completion/total tokens, surfaced per turn in the API response.
-- **Embeddings:** [`embed()`](../src/llm/embeddings.js#L16-L30) — `text-embedding-v3` at 1024 dimensions for semantic memory recall. Falls back to deterministic pseudo-embeddings when no API key is set (local dev only).
+- **Base URL (literal):** [`config.js`](../src/config.js) — the Qwen base URL `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` is defined here.
+- **Client initialisation:** [`dashscope.js`](../src/llm/dashscope.js) — creates the OpenAI SDK client pointed at the DashScope international endpoint.
+- **4-tier model routing:** [`resolveModel()`](../src/llm/dashscope.js) — `qwen3.6-flash` for cheap extraction, `qwen3.6-plus` for chat NLG, `qwen3.7-max` (hybrid **thinking** enabled) for agronomic reasoning with tool calling, `qwen3-vl-plus` for field-photo analysis.
+- **Chat completion + SSE streaming:** [`chat()` / `streamCompletion()`](../src/llm/dashscope.js) — every LLM call resolves the model tier and tracks token usage; streaming assembles content, thinking deltas, and tool-call fragments.
+- **Hybrid-thinking control:** `enable_thinking` per tier (`QWEN_THINKING_TIERS`) — deep reasoning where it pays, low latency everywhere else.
+- **JSON extraction:** [`chatJSON()`](../src/llm/dashscope.js) — structured memory extraction with `response_format: { type: 'json_object' }`.
+- **Token accounting:** concurrency-safe per-turn collectors ([`newUsageCollector()`](../src/llm/dashscope.js)) plus a process tally, surfaced per turn in the API response; transient errors retried with exponential backoff.
+- **Embeddings:** [`embed()`](../src/llm/embeddings.js) — `text-embedding-v3` at 1024 dimensions for semantic memory recall. Falls back to deterministic pseudo-embeddings when no API key is set (local dev only).
+- **Reranking:** [`rerank.js`](../src/llm/rerank.js) — the `qwen3-rerank` cross-encoder (DashScope native rerank API) re-orders recalled memories; degrades gracefully to vector order.
 
 ## 2. Persistent memory — Alibaba Cloud Tablestore
 
@@ -30,10 +32,11 @@ sessions, and human-in-the-loop proposals are stored in **Alibaba Cloud Tablesto
 
 - **Full implementation:** [`tablestoreStore.js`](../src/memory/store/tablestoreStore.js) — uses the `tablestore` npm package (`^5.6.3`).
 - **Table provisioning (incl. TTL):** [`provisionTables()`](../src/memory/store/tablestoreStore.js#L287-L318), invoked by [`deploy/provision.js`](../deploy/provision.js).
-- **Profile storage:** [`getProfile()` / `setProfileFact()`](../src/memory/store/tablestoreStore.js#L87-L123) — PK-range queries on the `profiles` table.
-- **Episodic memory:** [`putEpisodic()` / `listEpisodic()` / `touchEpisodic()`](../src/memory/store/tablestoreStore.js#L125-L204) — reinforcement counting and TTL-based physical deletion.
-- **Sessions & proposals:** [`saveSession()` / `putProposal()` / `updateProposal()`](../src/memory/store/tablestoreStore.js#L207-L284) — HITL approval state persisted in Tablestore.
-- **Driver switch:** [`getStore()`](../src/memory/store/index.js#L9-L12) — `STORAGE_DRIVER=alibaba` selects Tablestore; `local` selects JSON files for dev.
+- **Profile storage:** [`getProfile()` / `setProfileFact()`](../src/memory/store/tablestoreStore.js) — PK-range queries on the `profiles` table.
+- **Episodic memory:** [`putEpisodic()` / `listEpisodic()` / `touchEpisodic()`](../src/memory/store/tablestoreStore.js) — reinforcement counting and TTL-based physical deletion.
+- **Hot-path point lookups:** [`getEpisodicByIds()`](../src/memory/store/tablestoreStore.js) — `BatchGetRow` hydration of DashVector candidates, so recall never range-scans a farmer's full history.
+- **Sessions & proposals:** [`saveSession()` / `putProposal()` / `updateProposal()`](../src/memory/store/tablestoreStore.js) — HITL approval state persisted in Tablestore.
+- **Driver switch:** [`getStore()`](../src/memory/store/index.js) — `STORAGE_DRIVER=alibaba` selects Tablestore; `local` selects JSON files for dev.
 
 ## 3. Semantic recall — Alibaba Cloud DashVector
 
@@ -76,11 +79,12 @@ means **Alibaba Cloud does not enforce RAM/JWT authentication at the FC gateway*
 
 | Layer | What it does | Where |
 |---|---|---|
-| **Application API key** | All mutating routes (`POST /api/chat`, proposal approve/reject) require `AGENT_API_KEY` via `x-api-key` or `Authorization: Bearer`. Requests without it get `401`. | [`auth.js`](../src/middleware/auth.js), [`chat.js`](../src/routes/chat.js), [`proposals.js`](../src/routes/proposals.js) |
-| **Farmer identity** | The NaLog web app forwards the user's **Firebase ID token** (`X-NaLog-Token`). Memory and farm data are scoped to that farmer — the agent never trusts a bare `farmerId` from the body alone. | [`chat.js`](../src/routes/chat.js), [`jwt.js`](../src/utils/jwt.js) |
-| **CORS** | Browser calls are restricted to origins listed in `ALLOWED_ORIGINS` (e.g. the NaLog dashboard). | [`server.js`](../src/server.js) |
-| **Human-in-the-loop** | Pump commands are **proposals** only. A LoRaWAN downlink is sent only after an explicit approve action, and only when `REQUIRE_HUMAN_APPROVAL=true` (default). | [`proposals.js`](../src/routes/proposals.js) |
-| **Server-side secrets** | DashScope, Tablestore, DashVector, ChirpStack, and NaLog credentials live in FC environment variables — never returned to clients. | [`ENV_KEYS`](../deploy/fc-deploy.mjs#L34-L41) |
+| **Application API key** | Every API route requires `AGENT_API_KEY` via `x-api-key` or `Authorization: Bearer`. Requests without it get `401`. | [`auth.js`](../src/middleware/auth.js) |
+| **Verified farmer identity** | The NaLog web app forwards the user's **Firebase ID token** (`X-NaLog-Token`). With `FIREBASE_PROJECT_ID` set (production), the token's **RS256 signature is verified against Google's rotating public certs**, plus `iss`/`aud`/`exp`/alg checks — forged or expired tokens get `401`. Memory, sessions and proposals are scoped to the verified uid; live mode without a token is rejected. | [`jwt.js`](../src/utils/jwt.js), [`auth.js`](../src/middleware/auth.js) |
+| **Ownership enforcement** | Proposals can only be listed/viewed/approved/rejected by the farmer they belong to (`403` otherwise); `/api/memory` and session history are scoped to the authenticated identity. | [`proposals.js`](../src/routes/proposals.js), [`chat.js`](../src/routes/chat.js) |
+| **CORS** | Cross-origin browser calls require an explicit `ALLOWED_ORIGINS` entry; unset means same-origin only. | [`server.js`](../src/server.js) |
+| **Human-in-the-loop** | Pump commands are **proposals** only. A LoRaWAN downlink is sent only after an explicit approve action by the owning farmer. The autonomous alert webhook creates proposals but can never actuate. | [`proposals.js`](../src/routes/proposals.js), [`alerts.js`](../src/routes/alerts.js) |
+| **Server-side secrets** | DashScope, Tablestore, DashVector, ChirpStack, and NaLog credentials live in FC environment variables — never returned to clients. | [`ENV_KEYS`](../deploy/fc-deploy.mjs) |
 
 `GET /healthz` is intentionally unauthenticated: it returns only non-sensitive runtime
 metadata (storage driver, model names) for ops and smoke tests.

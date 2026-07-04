@@ -71,6 +71,18 @@ export default class LocalStore {
     });
   }
 
+  async getEpisodicByIds(farmerId, ids) {
+    const now = Date.now();
+    return ids
+      .map((id) => this.db.episodic[id])
+      .filter(
+        (m) =>
+          m &&
+          m.farmerId === farmerId &&
+          !(m.expiresAt && new Date(m.expiresAt).getTime() < now)
+      );
+  }
+
   async touchEpisodic(memory, { reinforce = false } = {}) {
     const m = this.db.episodic[memory.memoryId];
     if (!m) return null;

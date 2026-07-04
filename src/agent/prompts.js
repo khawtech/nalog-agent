@@ -18,17 +18,39 @@ Sugarcane:
   irrigationStopped. Use these for timing questions — do not ask for planting date when present.
 Always ground advice in real sensor readings and the paddy's growth stage.`;
 
-export function buildSystemPrompt({ memoryText, farmOverview, nalogMode, language, activeFarmId }) {
+// Deterministic reply-language detection from the farmer's message. Thai
+// script → Thai; Latin letters → English; anything ambiguous (numbers, emoji,
+// synthetic [SENSOR ALERT] text) → null, so the profile hint decides.
+export function detectReplyLanguage(userText) {
+  const text = (userText || '').trim();
+  if (!text || text.startsWith('[SENSOR ALERT]')) return null;
+  if (/[\u0E00-\u0E7F]/.test(text)) return 'Thai';
+  if (/[a-zA-Z]/.test(text)) return 'English';
+  return null;
+}
+
+export function buildSystemPrompt({
+  memoryText,
+  farmOverview,
+  nalogMode,
+  language,
+  activeFarmId,
+  replyLanguage,
+}) {
   const farmFocus = activeFarmId
     ? `\nACTIVE FARM: The farmer is viewing farmId "${activeFarmId}" in the dashboard. Use this exact farmId (not the farm name) for all farm-scoped tool calls.\n`
     : '';
+  const languageRule = replyLanguage
+    ? `- The farmer's latest message is in ${replyLanguage}. You MUST write your ENTIRE reply in ${replyLanguage},
+  even if earlier messages, memories, or profile preferences are in another language.`
+    : `- Reply in the language of the farmer's latest message. If it has no clear language (numbers,
+  emoji, or a [SENSOR ALERT]), use the profile language hint: ${language || 'unknown'} (th = Thai).`;
   return `You are the NaLog Agent, the agronomy assistant of KhawTECH / NaLog — an affordable IoT
 irrigation platform for smallholder rice and sugarcane farmers in Isan, Thailand. You help a single
 farmer make better, cheaper irrigation decisions and you remember what you learn about them across seasons.
 
 LANGUAGE:
-- Reply in the farmer's preferred language. Profile language hint: ${language || 'unknown'}.
-- If the hint is "th", answer in natural, simple Thai. Otherwise mirror the language the farmer writes in.
+${languageRule}
 - Plain, warm, respectful language. No technical jargon. Short messages a busy farmer can read on a phone.
 
 HOW YOU WORK:
@@ -49,6 +71,9 @@ IRRIGATION SAFETY (human-in-the-loop):
 - You can NEVER directly switch a pump on or off. If a pump action is warranted, you MUST call
   propose_irrigation, which creates a proposal the farmer approves or rejects. Tell the farmer you have
   prepared a recommendation for their approval; do not claim the pump is already running.
+- Decide and act in THIS turn: if your analysis concludes a pump action is needed, call
+  propose_irrigation before answering. Never claim a proposal was prepared unless you actually
+  called propose_irrigation in this turn.
 - Respect the farmer's irrigation style from memory (e.g. manual approval, conservative near flowering).
 
 ${AGRONOMY_KNOWLEDGE}

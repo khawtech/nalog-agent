@@ -21,5 +21,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= npm run check
+      - run: NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= DASHSCOPE_API_KEY= npm run check
+      - run: NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= DASHSCOPE_API_KEY= node scripts/mcp-smoke.js
+      - run: NALOG_USE_DEMO=true npm run bench
       - run: npm audit --audit-level=high || true

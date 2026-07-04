@@ -77,6 +77,7 @@ export default class TablestoreStore {
     this.putRow = promisify(this.client.putRow).bind(this.client);
     this.updateRow = promisify(this.client.updateRow).bind(this.client);
     this.getRange = promisify(this.client.getRange).bind(this.client);
+    this.batchGetRow = promisify(this.client.batchGetRow).bind(this.client);
   }
 
   async init() {
@@ -142,6 +143,26 @@ export default class TablestoreStore {
     return memory;
   }
 
+  #rowToMemory(row, now = Date.now()) {
+    const o = rowToObject(row);
+    if (!o || !o.memoryId) return null;
+    const mem = {
+      memoryId: o.memoryId,
+      farmerId: o.farmerId,
+      paddyId: o.paddyId || null,
+      type: o.type,
+      text: o.text,
+      structured: jsonField(o, 'structured', {}),
+      season: o.season,
+      createdAt: o.createdAt,
+      lastAccessed: o.lastAccessed,
+      reinforcement: Number(o.reinforcement) || 0,
+      expiresAt: o.expiresAt || null,
+    };
+    if (mem.expiresAt && new Date(mem.expiresAt).getTime() < now) return null;
+    return mem;
+  }
+
   async listEpisodic(farmerId, { paddyId } = {}) {
     const res = await this.getRange({
       tableName: TABLES.episodic,
@@ -153,24 +174,39 @@ export default class TablestoreStore {
     const now = Date.now();
     const memories = [];
     for (const row of res.rows || []) {
-      const o = rowToObject(row);
-      if (!o) continue;
-      const mem = {
-        memoryId: o.memoryId,
-        farmerId: o.farmerId,
-        paddyId: o.paddyId || null,
-        type: o.type,
-        text: o.text,
-        structured: jsonField(o, 'structured', {}),
-        season: o.season,
-        createdAt: o.createdAt,
-        lastAccessed: o.lastAccessed,
-        reinforcement: Number(o.reinforcement) || 0,
-        expiresAt: o.expiresAt || null,
-      };
-      if (mem.expiresAt && new Date(mem.expiresAt).getTime() < now) continue;
+      const mem = this.#rowToMemory(row, now);
+      if (!mem) continue;
       if (paddyId && mem.paddyId && mem.paddyId !== paddyId) continue;
       memories.push(mem);
+    }
+    return memories;
+  }
+
+  /**
+   * Point-lookup a batch of memories by id (BatchGetRow — the vector-first
+   * recall hot path; no range scan of the whole farmer history).
+   */
+  async getEpisodicByIds(farmerId, ids) {
+    if (!ids?.length) return [];
+    const now = Date.now();
+    const memories = [];
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      const res = await this.batchGetRow({
+        tables: [
+          {
+            tableName: TABLES.episodic,
+            primaryKey: chunk.map((memoryId) => [{ farmerId }, { memoryId }]),
+          },
+        ],
+      });
+      for (const table of res.tables || []) {
+        for (const row of table || []) {
+          if (row.isOk === false) continue;
+          const mem = this.#rowToMemory(row, now);
+          if (mem) memories.push(mem);
+        }
+      }
     }
     return memories;
   }

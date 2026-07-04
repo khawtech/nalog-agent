@@ -97,11 +97,13 @@ async function main() {
         message: 'List my farms and paddies briefly.',
         farmerId: UNIQUE,
       });
+      const trace = JSON.stringify(json?.toolTrace || []);
       const farmsListed =
         status === 200 &&
-        (json?.message?.includes('Kutchum') ||
-          JSON.stringify(json?.toolTrace || []).includes('Kutchum'));
+        (json?.toolTrace || []).some((t) => t.tool === 'get_farm_overview') &&
+        typeof json?.message === 'string' && json.message.length > 0;
       record('POST /api/chat (live farm overview)', farmsListed, okDetail(status, json));
+      record('live farm data in tool trace', /farmId|paddyId/.test(trace));
       sessionId = json?.sessionId || null;
     } catch (e) {
       record('POST /api/chat (live farm overview)', false, e.message);
@@ -109,22 +111,22 @@ async function main() {
 
     try {
       const { status, json } = await http('POST', '/api/chat', {
-        message: 'What is the water level in Paddy 3 (North Rice) and should I pump now?',
+        message: 'What is the water level in my rice paddy and should I pump now?',
         farmerId: UNIQUE,
         sessionId,
       });
       const ok = status === 200 && typeof json?.message === 'string' && json.message.length > 0;
-      record('POST /api/chat (Paddy 3 AWD turn)', ok, okDetail(status, json));
+      record('POST /api/chat (AWD paddy turn)', ok, okDetail(status, json));
       sessionId = json?.sessionId || sessionId;
       const usedPaddyTool = (json?.toolTrace || []).some((t) => t.tool === 'get_paddy_status');
       record('agent called get_paddy_status', usedPaddyTool);
       const trace = JSON.stringify(json?.toolTrace || []);
-      const sawLevel = trace.includes('"level"') || trace.includes('North Rice');
+      const sawLevel = trace.includes('"level"') || trace.includes('waterLevel');
       record('grounded in live sensor/paddy data', sawLevel);
       const match = trace.match(/"paddyId":"([^"]+)"/);
       if (match) paddy3Id = match[1];
     } catch (e) {
-      record('POST /api/chat (Paddy 3 AWD turn)', false, e.message);
+      record('POST /api/chat (AWD paddy turn)', false, e.message);
     }
   } else {
     record('live NaLog integration', false, 'no Firebase token');
@@ -136,6 +138,25 @@ async function main() {
       record('GET /api/session/:id/messages', status === 200 && (json?.messages?.length || 0) >= 2, `${json?.messages?.length || 0} msgs`);
     } catch (e) {
       record('GET /api/session/:id/messages', false, e.message);
+    }
+  }
+
+  // Track 4 — autonomous sensor-alert turn (no farmer message).
+  if (nalogToken && paddy3Id) {
+    try {
+      const { status, json } = await http('POST', '/api/alerts', {
+        paddyId: paddy3Id,
+        metric: 'water_level',
+        value: -16,
+        unit: 'cm',
+        threshold: -15,
+        direction: 'below',
+        note: 'smoke test alert',
+      });
+      const ok = status === 200 && json?.ok === true && typeof json?.assessment === 'string';
+      record('POST /api/alerts (autonomous turn)', ok, okDetail(status, json));
+    } catch (e) {
+      record('POST /api/alerts (autonomous turn)', false, e.message);
     }
   }
 

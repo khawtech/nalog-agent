@@ -9,14 +9,20 @@ const ok = (m) => console.log(`  ✓ ${m}`);
 const fail = (m, d) => { failures++; console.error(`  ✗ ${m} — ${d}`); };
 
 async function main() {
-  const transport = new StdioClientTransport({ command: 'node', args: ['src/mcp/server.js'] });
+  // Inherit the full environment (StdioClientTransport defaults to a minimal
+  // env, which would drop NODE_ENV/driver settings from the spawned server).
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['src/mcp/server.js'],
+    env: { ...process.env },
+  });
   const client = new Client({ name: 'mcp-smoke', version: '1.0.0' });
   await client.connect(transport);
   console.log('MCP smoke test\n');
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  const expected = ['get_farm_overview', 'get_paddy_status', 'get_sensor_history', 'recall_memory', 'save_memory', 'update_profile', 'get_irrigation_history', 'propose_irrigation'];
+  const expected = ['get_farm_overview', 'get_paddy_status', 'get_sensor_history', 'recall_memory', 'save_memory', 'update_profile', 'get_irrigation_history', 'analyze_field_photo', 'propose_irrigation'];
   expected.every((n) => names.includes(n))
     ? ok(`listTools → ${names.length} tools`)
     : fail('listTools', `missing some of ${expected.join(',')} (got ${names.join(',')})`);

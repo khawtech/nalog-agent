@@ -136,6 +136,19 @@ export async function buildMcpServer() {
   );
 
   register(
+    'analyze_field_photo',
+    {
+      title: 'Analyze field photo (Qwen-VL)',
+      description: 'Agronomic analysis of a paddy/field photo: crop condition, water, pests, weeds.',
+      inputSchema: {
+        imageUrl: z.string().url().describe('http(s) URL of the field photo'),
+        question: z.string().optional().describe('What to look for'),
+      },
+    },
+    'analyze_field_photo'
+  );
+
+  register(
     'propose_irrigation',
     {
       title: 'Propose irrigation (human-in-the-loop)',
