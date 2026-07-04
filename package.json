@@ -20,6 +20,7 @@
     "provision": "node deploy/provision.js",
     "deploy:build": "bash deploy/fc-zip-build.sh",
     "deploy:fc": "node deploy/fc-deploy.mjs",
+    "bench": "node scripts/benchmark-memory.mjs",
     "test": "NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= DASHSCOPE_API_KEY= FIREBASE_PROJECT_ID= RERANK_MODEL= node --test"
   },
   "dependencies": {
