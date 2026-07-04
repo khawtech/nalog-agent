@@ -15,6 +15,7 @@ COPY src ./src
 COPY public ./public
 COPY scripts ./scripts
 COPY deploy ./deploy
+COPY test ./test
 
 # Function Compute sends a SIGTERM on scale-in; node handles it by default.
 EXPOSE 8080

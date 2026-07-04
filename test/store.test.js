@@ -39,6 +39,24 @@ test('episodic listing filters expired and by paddy', async () => {
   assert.equal(p1[0].memoryId, 'm1');
 });
 
+test('getEpisodicByIds returns only live rows owned by the farmer', async () => {
+  const store = await new LocalStore(tmpDir()).init();
+  const now = new Date().toISOString();
+  await store.putEpisodic({ memoryId: 'm1', farmerId: 'f1', text: 'mine', createdAt: now });
+  await store.putEpisodic({ memoryId: 'm2', farmerId: 'other-farmer', text: 'not mine', createdAt: now });
+  await store.putEpisodic({
+    memoryId: 'm3',
+    farmerId: 'f1',
+    text: 'expired',
+    createdAt: now,
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+
+  const got = await store.getEpisodicByIds('f1', ['m1', 'm2', 'm3', 'm-missing']);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].memoryId, 'm1');
+});
+
 test('purgeExpired returns removed memory IDs', async () => {
   const store = await new LocalStore(tmpDir()).init();
   const now = new Date().toISOString();

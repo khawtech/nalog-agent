@@ -104,6 +104,52 @@ test('learnFromConversation handles extraction failure', async () => {
   assert.deepEqual(result, { profileFacts: [], episodic: [] });
 });
 
+test('recall cleans up orphan vector entries (vector-first path)', async () => {
+  const dir = tmp();
+  const store = await new LocalStore(dir).init();
+  const vector = await new LocalVector(dir).init();
+  const mm = new MemoryManager(store, vector);
+
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'paddy drains fast' });
+  // Simulate a Tablestore-TTL-deleted row: vector entry without a store row.
+  const { embedOne } = await import('../src/llm/embeddings.js');
+  await vector.upsert('orphan-id', await embedOne('observation: stale memory'), { farmerId: 'f1', memoryId: 'orphan-id' });
+  assert.equal(vector.docs.size, 2);
+
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'paddy drains', limit: 5 });
+  assert.equal(recalled.length, 1, 'only the live memory is recalled');
+
+  await new Promise((r) => setTimeout(r, 20)); // orphan cleanup is fire-and-forget
+  assert.equal(vector.docs.size, 1, 'orphan vector entry was deleted');
+  assert.ok(vector.docs.has(recalled[0].memoryId));
+});
+
+test('recall falls back to stored memories when the vector index is empty', async () => {
+  const dir = tmp();
+  const store = await new LocalStore(dir).init();
+  const vector = await new LocalVector(dir).init();
+  const mm = new MemoryManager(store, vector);
+
+  // Store row exists but vector upsert never happened (e.g. embed outage).
+  await store.putEpisodic({
+    memoryId: 'm-novector',
+    farmerId: 'f1',
+    paddyId: null,
+    type: 'observation',
+    text: 'stored without a vector',
+    structured: {},
+    season: currentSeason(),
+    createdAt: new Date().toISOString(),
+    lastAccessed: new Date().toISOString(),
+    reinforcement: 0,
+    expiresAt: null,
+  });
+
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'anything at all', limit: 5 });
+  assert.equal(recalled.length, 1, 'graceful degradation to store listing');
+  assert.equal(recalled[0].memoryId, 'm-novector');
+});
+
 test('purgeExpired removes expired memories and their vectors', async () => {
   const dir = tmp();
   const store = await new LocalStore(dir).init();
