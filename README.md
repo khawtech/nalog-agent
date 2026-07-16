@@ -11,12 +11,17 @@
 > Built on **Alibaba Cloud** (Model Studio / Qwen, Function Compute, Tablestore,
 > DashVector) on top of the [NaLog / KhawTECH](https://khawtech.com) IoT irrigation platform.
 
-> **Production system.** This is the same backend that powers the NaLog Agent in the
-> live [KhawTECH](https://nalog-app.khawtech.com) SaaS platform, serving real farmers in Isan,
-> Thailand. It runs on Alibaba Cloud Function Compute in Bangkok (`ap-southeast-7`)
-> with Tablestore, DashVector, and Model Studio. The demo mode included here uses a
-> bundled dataset so anyone can run it locally — but the production path is already
-> deployed and handling real conversations, real sensors, and real pump commands.
+> **Production system — not a hackathon prototype.** This is the same backend deployed
+> on Alibaba Cloud Function Compute in Bangkok (`ap-southeast-7`), serving real farmers
+> in Isan, Thailand through the [KhawTECH](https://nalog-app.khawtech.com) NaLog platform. It
+> handles real conversations, real sensor data, and real pump commands. The demo mode
+> included here uses a bundled dataset so anyone can run it locally — the production
+> path is one `STORAGE_DRIVER=alibaba` away.
+>
+> **Why this exists:** A family member died alone in a rice paddy, checking water by
+> eye (the kind of trip millions of farmers make daily). Every sensor we deploy is one
+> less reason for that walk. We're in active talks with local government in Isan to
+> expand coverage. Hackathon funding goes directly into sensors and LoRa gateways.
 
 **Hackathon track:** **Track 1 — MemoryAgent** (primary submission). The same codebase
 also includes an autonomous sensor-alert webhook (`POST /api/alerts`) that *could* qualify
@@ -145,7 +150,7 @@ dev to production by changing the driver env vars:
      node scripts/firebase-test-token.mjs <farmer-uid>
    ```
 
-In production, the KhawTECH NaLog farmer web app connects to this backend via the
+In production, the KhawTECH NaLog farmer dashboard connects to this backend via the
 Function Compute HTTP trigger, forwarding the farmer's Firebase ID token for identity
 scoping.
 
