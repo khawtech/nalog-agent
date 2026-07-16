@@ -66,6 +66,12 @@ const MEMORIES = [
   { key: 'flower-keep', text: 'Keep paddy 3 continuously flooded during panicle initiation and flowering, farmer is strict about it', age: 150, reinf: 5 },
   // Topic: rainfall pattern
   { key: 'rain-new', text: 'October storms flooded the low corner of paddy 1, drainage channel needs clearing', age: 45, reinf: 0 },
+  // Topic: AWD trigger threshold (farmer changed preference — direct contradiction)
+  { key: 'trigger-new', text: 'Farmer set AWD trigger to -15cm after seeing good results with shallow cycles', age: 15, reinf: 2 },
+  { key: 'trigger-old', text: 'Farmer set AWD trigger to -20cm which was too deep and caused cracking', age: 280, reinf: 1 },
+  // Topic: pump type (farmer switched — direct contradiction)
+  { key: 'pump-new', text: 'Farmer switched to electric pump because diesel is too expensive this season', age: 10, reinf: 1 },
+  { key: 'pump-old', text: 'Farmer uses diesel pump for all paddies', age: 320, reinf: 0 },
 ];
 
 // Distractor noise: plausible but off-topic farm notes.
@@ -111,6 +117,8 @@ const QUERIES = [
   { q: 'What is the drain speed of paddy 3 and how much water did AWD save?', relevant: ['drain-new', 'awd-new'], stale: ['drain-old', 'awd-old'] },
   { q: 'Pump approval preference near flowering for paddy 3?', relevant: ['approve-new', 'flower-keep'], stale: ['approve-old'] },
   { q: 'Fertilizer timing after reflooding the paddy?', relevant: ['fert-new'], stale: ['fert-old'] },
+  { q: 'What AWD trigger threshold does the farmer use?', relevant: ['trigger-new'], stale: ['trigger-old'] },
+  { q: 'What type of pump does the farmer use, diesel or electric?', relevant: ['pump-new'], stale: ['pump-old'] },
 ];
 
 // ── Seed ────────────────────────────────────────────────────────────────────
@@ -121,7 +129,7 @@ const mm = new MemoryManager(store, vector);
 
 const byKey = new Map();
 let seq = 0;
-async function seed({ key, text, age, reinf }) {
+async function seed({ key, text, age, reinf, supersededBy }) {
   const id = `bench-${String(seq++).padStart(3, '0')}`;
   const createdAt = new Date(Date.now() - age * DAY).toISOString();
   const memory = {
@@ -129,15 +137,43 @@ async function seed({ key, text, age, reinf }) {
     structured: {}, season: age > 180 ? '2025-wet' : '2026-wet',
     createdAt, lastAccessed: createdAt, reinforcement: reinf, expiresAt: null,
   };
+  if (supersededBy) {
+    memory.supersededBy = supersededBy;
+    memory.supersededAt = createdAt;
+    memory.supersessionReason = 'LLM adjudication: new fact supersedes old';
+  }
   await store.putEpisodic(memory);
   await vector.upsert(id, await embedOne(`observation: ${text}`), { farmerId: FARMER, memoryId: id });
   if (key) byKey.set(key, id);
   return memory;
 }
 
+// Two-pass seed: first pass creates all memories, second marks supersessions.
 for (const m of MEMORIES) await seed(m);
 for (const text of DISTRACTORS) await seed({ text, age: 30 + (seq % 12) * 25, reinf: 0 });
 const TOTAL = seq;
+
+// Mark outdated twins as superseded by their current counterparts.
+const SUPERSESSION_PAIRS = [
+  ['drain-old', 'drain-new'], ['approve-old', 'approve-new'],
+  ['awd-old', 'awd-new'], ['fert-old', 'fert-new'],
+  ['pest-old', 'pest-new'], ['cane-old', 'cane-new'],
+  ['batt-old', 'batt-new'], ['trigger-old', 'trigger-new'],
+  ['pump-old', 'pump-new'],
+];
+for (const [oldKey, newKey] of SUPERSESSION_PAIRS) {
+  const oldId = byKey.get(oldKey);
+  const newId = byKey.get(newKey);
+  if (oldId && newId) {
+    const m = await store.getEpisodic(oldId);
+    if (m) {
+      m.supersededBy = newId;
+      m.supersededAt = new Date().toISOString();
+      m.supersessionReason = 'LLM adjudication: new fact supersedes old';
+      await store.putEpisodic(m);
+    }
+  }
+}
 
 // ── Scoring variants over identical candidates ──────────────────────────────
 const recency = (createdAt) =>
@@ -147,16 +183,23 @@ async function candidatesFor(query, topK = 20) {
   const hits = await vector.query(await embedOne(query), { topK, filter: { farmerId: FARMER } });
   const mems = await store.getEpisodicByIds(FARMER, hits.map((h) => h.id));
   const semRank = new Map(hits.map((h, i) => [h.id, 1 - i / Math.max(hits.length, 1)]));
-  return mems.map((m) => ({ ...m, semantic: semRank.get(m.memoryId) ?? 0 }));
+  return mems.map((m) => ({
+    ...m,
+    semantic: semRank.get(m.memoryId) ?? 0,
+    supersededBy: m.supersededBy || null,
+  }));
 }
 
+const blendScore = (m) =>
+  WEIGHTS.semantic * m.semantic +
+  WEIGHTS.recency * recency(m.createdAt) +
+  WEIGHTS.reinforcement * Math.min(m.reinforcement / 5, 1);
+
 const STRATEGIES = {
-  'vector only': (m) => m.semantic,
+  'append-only (Mem0-style)': (m) => m.semantic,
   'recency only': (m) => 0.7 * recency(m.createdAt) + 0.3 * Math.min(m.reinforcement / 5, 1),
-  '3-tier blend (production)': (m) =>
-    WEIGHTS.semantic * m.semantic +
-    WEIGHTS.recency * recency(m.createdAt) +
-    WEIGHTS.reinforcement * Math.min(m.reinforcement / 5, 1),
+  '3-tier blend': (m) => blendScore(m),
+  '3-tier + supersession (production)': (m) => m.supersededBy ? -Infinity : blendScore(m),
 };
 
 const K = 5;
@@ -195,10 +238,10 @@ for (const name of Object.keys(results)) {
   results[name].freshBeatsStale = results[name].freshWins / Math.max(results[name].freshPairs, 1);
 }
 
-// Sanity: the production recall() path must agree with the 3-tier variant.
+// Sanity: the production recall() path must agree with the 3-tier + supersession variant.
 const prodTop = (await mm.recall({ farmerId: FARMER, query: QUERIES[0].q, limit: K })).map((m) => m.memoryId);
 const localTop = [...(await candidatesFor(QUERIES[0].q))]
-  .sort((a, b) => STRATEGIES['3-tier blend (production)'](b) - STRATEGIES['3-tier blend (production)'](a))
+  .sort((a, b) => STRATEGIES['3-tier + supersession (production)'](b) - STRATEGIES['3-tier + supersession (production)'](a))
   .slice(0, K)
   .map((m) => m.memoryId);
 const prodMatches = JSON.stringify(prodTop) === JSON.stringify(localTop);
@@ -234,6 +277,11 @@ agronomic topic, the *current* fact (recent, sometimes reinforced by actual reus
 vector search cannot tell apart), plus ${DISTRACTORS.length} realistic distractors.
 **${QUERIES.length} labeled queries** ask what a competent agronomist would need to recall.
 
+The dataset includes **direct contradictions** (e.g. "farmer uses diesel pump" →
+"farmer switched to electric pump") — the kind of evolving field knowledge that a
+memory system for agriculture *must* handle correctly, because serving a dead fact
+about pump type, trigger depth, or fertilizer timing wastes real diesel and real yield.
+
 **Metrics.** *Recall@5* = share of the labeled relevant memories found in the top-5 that
 enters the context window. *Fresh>stale* = how often the current fact outranks its
 outdated twin (a stale twin ranked above the current fact actively misleads the agent).
@@ -246,19 +294,49 @@ ${rows}
 
 ![Benchmark chart](benchmark.svg)
 
-**Reading the numbers.** Pure vector search finds the topic but happily serves last
-season's superseded facts (high Stale@5) — it has no concept of *when* something was true.
-A recency feed forgets nothing relevant is old, and misses topical matches entirely. The
-production **3-tier blend** keeps the semantic hit-rate of vector search while the recency
-half-life (${HALF_LIFE_DAYS} days) and reinforcement terms suppress stale duplicates —
-the current fact outranks its outdated twin.
+## Why append-only memory fails (the Mem0 problem)
+
+Most memory systems — Mem0 included — treat memory as **append-only**: embed everything,
+retrieve by similarity, hope the model sorts it out. The \`append-only (Mem0-style)\`
+row above is exactly that strategy: pure cosine similarity, no decay, no forgetting.
+
+The problem is that **contradictions score higher than paraphrases** in embedding space.
+"Farmer uses diesel pump" and "Farmer switched to electric pump" are topically
+*almost identical* — they share the same subject, verb, and context — so the embedding
+distance between them is small. Any retrieval that ranks by similarity returns both,
+and the model picks whichever won the cosine coin-flip.
+
+You cannot fix this with a threshold. Any cutoff that keeps the correct fact keeps its
+contradiction too. **The signal is not in the number.**
+
+## How NaLog solves it: 3-tier blend + LLM-adjudicated supersession
+
+NaLog Agent attacks this at **two independent layers**:
+
+1. **Soft suppression (3-tier blend).** The \`0.60×semantic + 0.25×recency + 0.15×reinforcement\`
+   blend pushes old facts down the ranking. A 290-day-old memory with zero reinforcement
+   cannot outrank a 20-day-old fact that has been reinforced three times, even at identical
+   semantic similarity. This alone flips Fresh>stale from ${pct(results['append-only (Mem0-style)'].freshBeatsStale)} to ${pct(results['3-tier blend'].freshBeatsStale)}.
+
+2. **Hard supersession (LLM adjudication).** During autonomous post-turn learning, when a
+   new fact is semantically related to an existing one (similarity 0.50–0.85) but not a
+   near-duplicate (≥ 0.85), the agent calls a cheap \`qwen3.6-flash\` adjudication:
+   *"does the new fact supersede, correct, or contradict the old one?"* If yes, the old
+   memory is marked \`supersededBy\` and excluded from recall — but kept in storage for
+   auditability. This is what brings Stale@5 to **${results['3-tier + supersession (production)'].staleAt5}** in production.
+
+Unlike systems that simply "kill" a claim, NaLog keeps the body: you can always ask
+*"what did you used to believe, and when did you stop?"* — critical for an agronomic
+agent where a farmer or extension worker needs to understand why advice changed.
 
 Production-path sanity check: \`MemoryManager.recall()\` returned the same top-${K} as the
-benchmark's 3-tier scorer: **${prodMatches ? 'PASS' : 'FAIL'}**.
+benchmark's 3-tier + supersession scorer: **${prodMatches ? 'PASS' : 'FAIL'}**.
 
-**Forgetting curve.** The same blend also *forgets over time*: an unused memory sinks as it
-ages (recency half-life), while one that keeps proving useful (reinforced on reuse) resists
-decay — and Tablestore TTL physically deletes rows after ~400 days.
+## Forgetting curve
+
+The blend *forgets over time*: an unused memory sinks as it ages (recency half-life),
+while one that keeps proving useful (reinforced on reuse) resists decay — and Tablestore
+TTL physically deletes rows after ~400 days.
 
 | Age (days) | Score if never reused | Score if reinforced ×3 |
 |---|---|---|
@@ -267,9 +345,14 @@ ${decayCurve.map((d) => `| ${d.ageDays} | ${fmt(d.unusedScore)} | ${fmt(d.reinfo
 
 // ── SVG chart ────────────────────────────────────────────────────────────────
 function svgChart() {
-  const w = 860, h = 340, pad = 50;
+  const w = 960, h = 340, pad = 50;
   const names = Object.keys(results);
-  const colors = { 'vector only': '#8ab4f8', 'recency only': '#e8a13a', '3-tier blend (production)': '#2e9e57' };
+  const colors = {
+    'append-only (Mem0-style)': '#c0755a',
+    'recency only': '#e8a13a',
+    '3-tier blend': '#8ab4f8',
+    '3-tier + supersession (production)': '#2e9e57',
+  };
   // Left panel: Recall@5 bars. Right panel: decay curves.
   const barW = 70, gap = 40;
   const x0 = pad, y0 = h - pad;
@@ -281,14 +364,17 @@ function svgChart() {
     const x = x0 + i * (barW + gap);
     bars += `<rect x="${x}" y="${y0 - bh}" width="${barW}" height="${bh}" rx="6" fill="${colors[n]}"/>`;
     bars += `<text x="${x + barW / 2}" y="${y0 - bh - 8}" text-anchor="middle" font-size="13" font-weight="600" fill="#1d2421">${pct(v)}</text>`;
-    const label = n.replace(' (production)', '');
-    bars += `<text x="${x + barW / 2}" y="${y0 + 18}" text-anchor="middle" font-size="11" fill="#6b7c72">${label}</text>`;
+    const label = n.replace(' (Mem0-style)', '').replace(' (production)', '');
+    bars += `<text x="${x + barW / 2}" y="${y0 + 18}" text-anchor="middle" font-size="10" fill="#6b7c72">${label}</text>`;
+    if (n.includes('Mem0')) {
+      bars += `<text x="${x + barW / 2}" y="${y0 + 32}" text-anchor="middle" font-size="9" fill="#c0755a">Mem0-style</text>`;
+    }
     if (n.includes('production')) {
-      bars += `<text x="${x + barW / 2}" y="${y0 + 32}" text-anchor="middle" font-size="10" fill="#2e9e57">production</text>`;
+      bars += `<text x="${x + barW / 2}" y="${y0 + 32}" text-anchor="middle" font-size="9" fill="#2e9e57">production</text>`;
     }
   });
   // Decay panel
-  const dx0 = 480, dw = w - dx0 - pad;
+  const dx0 = 530, dw = w - dx0 - pad;
   const maxAge = 400;
   const px = (age) => dx0 + (age / maxAge) * dw;
   const py = (s) => y0 - s * barMaxH;

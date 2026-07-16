@@ -48,6 +48,10 @@ himself near flowering, *last* season AWD here cut pumping 31% with no yield los
 The NaLog Agent is the agronomist with perfect memory in every farmer's pocket. It:
 
 - **Accumulates experience** per farmer and per paddy, across sessions and seasons.
+- **Detects and supersedes contradictions** — when learning extracts a fact that
+  conflicts with an existing memory (similarity 0.50–0.85), a cheap LLM adjudication
+  decides if the new fact supersedes the old one. The old memory is kept for
+  auditability but excluded from recall. See [the benchmark](docs/BENCHMARK.md).
 - **Forgets in a timely way** — memories decay with age and are physically expired via
   Tablestore TTL unless they keep proving useful (reinforcement). Measured, not claimed:
   see the [reproducible benchmark](docs/BENCHMARK.md).
@@ -180,7 +184,7 @@ Tools exposed (all 9, same as the ReAct loop): `get_farm_overview`, `get_paddy_s
 ## Tests, benchmark & CI
 
 ```bash
-npm test       # 103 tests (memory, store, vector, routes, tools, auth, agent loop, streaming, …)
+npm test       # 116 tests (memory, supersession, store, vector, routes, tools, auth, agent loop, streaming, …)
 npm run check  # boots app, hits endpoints
 npm run bench  # reproducible memory-retrieval benchmark → docs/BENCHMARK.md + chart
 ```
@@ -190,7 +194,8 @@ Tests are fully deterministic (demo mode, no API keys, no external services) and
 | Area | Tests |
 |---|---|
 | **Memory** | 3-tier recall, vector-first hydration, reinforcement, decay, purge + orphan vector cleanup, graceful fallbacks |
-| **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, failure handling |
+| **Supersession** | LLM adjudication detects contradictions, supersede marks old memory, recall excludes superseded, auditability preserved, failure handling |
+| **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, contradiction adjudication + supersession, failure handling |
 | **Agent loop** | Scripted ReAct rounds: tool execution, chat-tier composition, proposals, event streaming, per-turn usage, cross-session memory |
 | **Auth** | API-key gate, Firebase ID-token verification (signature, expiry, audience, issuer, alg-confusion), farmer scoping |
 | **Routes** | Health, chat validation, SSE streaming protocol, image validation, alert webhook, proposal ownership + lifecycle |
@@ -213,11 +218,16 @@ This project is submitted to **Track 1 — MemoryAgent**:
   **benchmarked** on a labeled dataset ([docs/BENCHMARK.md](docs/BENCHMARK.md))
 - Vector-first recall (DashVector candidates → Tablestore point lookups →
   `qwen3-rerank` cross-encoder) — O(topK) regardless of history size
+- **LLM-adjudicated supersession**: when a new fact contradicts an existing memory
+  (similarity 0.50–0.85), a cheap `qwen3.6-flash` call adjudicates whether the old
+  fact is superseded. The old memory is marked `supersededBy` and excluded from
+  recall — but kept in storage so you can always audit what changed and when
 - Soft forgetting via recency decay (120-day half-life) + reinforcement on reuse
 - Hard forgetting via Tablestore TTL (~400 days physical deletion)
 - Top-K recall within a deliberately limited context window
 - Autonomous post-turn learning (cheap `qwen3.6-flash` pass extracts durable facts) with
-  **deduplication**: exact text + semantic vector similarity prevents near-duplicate memories
+  **3-tier dedup**: exact text match, semantic near-duplicate (≥ 0.85), and contradiction
+  adjudication (0.50–0.85) — preventing both duplicates and conflicting facts
 - **Memory lifecycle**: expired memories are purged from both store and vector index;
   orphan vector entries (e.g. from Tablestore TTL) are cleaned lazily during recall
 - Cross-session, cross-season memory accumulation
@@ -231,8 +241,8 @@ human-in-the-loop approval → LoRaWAN pump command — but the hackathon entry 
 
 | Criterion | Where it shows up |
 |---|---|
-| **Technical Depth & Engineering (30%)** | Deliberate 4-tier Qwen routing (`qwen3.7-max` thinking + tool calls, `qwen3.6-plus` NLG, `qwen3.6-flash` extraction, `qwen3-vl-plus` vision) with hybrid-thinking control and SSE streaming; **MCP server** exposing all 9 tools; a **benchmarked 3-tier decaying memory** (vector-first recall + `qwen3-rerank`, recency decay, reinforcement, Tablestore TTL, dedup, orphan-vector cleanup); verified Firebase identity (RS256 against Google certs, no SDK); 103 automated tests + CI. |
-| **Innovation & AI Creativity (30%)** | Autonomous sensor-alert turns with human-in-the-loop actuation; cross-encoder reranking of memories; field-photo grounding via Qwen-VL; modular storage/vector drivers; bounded ReAct loop with graceful degradation; autonomous post-turn learning with semantic dedup; token-budget discipline with concurrency-safe per-turn reporting and retry/backoff. |
+| **Technical Depth & Engineering (30%)** | Deliberate 4-tier Qwen routing (`qwen3.7-max` thinking + tool calls, `qwen3.6-plus` NLG, `qwen3.6-flash` extraction + adjudication, `qwen3-vl-plus` vision) with hybrid-thinking control and SSE streaming; **MCP server** exposing all 9 tools; a **benchmarked 3-tier decaying memory** with **LLM-adjudicated supersession** (vector-first recall + `qwen3-rerank`, recency decay, reinforcement, contradiction detection, Tablestore TTL, 3-tier dedup, orphan-vector cleanup) — **100% Recall@5, 0 stale facts served** vs Mem0-style baseline at 92.9% with 10 stale leaks; verified Firebase identity (RS256 against Google certs, no SDK); 116 automated tests + CI. |
+| **Innovation & AI Creativity (30%)** | **LLM-adjudicated contradiction supersession** — when a new fact contradicts an old memory (sim 0.50–0.85), a cheap `qwen3.6-flash` adjudication decides if the old fact is superseded; the old memory is kept for auditability but excluded from recall; autonomous sensor-alert turns with human-in-the-loop actuation; cross-encoder reranking of memories; field-photo grounding via Qwen-VL; modular storage/vector drivers; bounded ReAct loop with graceful degradation; autonomous post-turn learning with 3-tier dedup (exact + semantic + adjudication); token-budget discipline with concurrency-safe per-turn reporting and retry/backoff. |
 | **Problem Value & Impact (25%)** | **Production deployment** serving real farmers (Kut Chum, Yasothon) — water/diesel savings, methane reduction, food security for poor families; open-source (MIT), productizable across co-ops and SE Asia. |
 | **Presentation & Documentation (15%)** | Architecture diagram, live streaming UI with tool-trace transparency, reproducible benchmark with chart ([docs/BENCHMARK.md](docs/BENCHMARK.md)), full docs (`README`, `docs/ARCHITECTURE.md`, `docs/proof-of-alibaba-deployment.md`), [blog post](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/). |
 
@@ -250,7 +260,7 @@ src/
 public/         web chat UI (streaming, tool trace, photo upload, memory panel)
 deploy/         Tablestore/DashVector provisioning, Function Compute deploy
 scripts/        selfcheck, MCP smoke, deployment smoke, memory benchmark, demo seed
-test/           103 automated tests (all deterministic, no cloud dependencies)
+test/           116 automated tests (all deterministic, no cloud dependencies)
 docs/           architecture, Alibaba proof, benchmark, submission checklist
 ```
 

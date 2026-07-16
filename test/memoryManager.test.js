@@ -150,6 +150,88 @@ test('recall falls back to stored memories when the vector index is empty', asyn
   assert.equal(recalled[0].memoryId, 'm-novector');
 });
 
+test('supersede marks old memory and recall excludes it', async () => {
+  const mm = await makeManager();
+  const old = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Farmer uses diesel pump' });
+  const fresh = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Farmer switched to electric pump' });
+
+  await mm.supersede('f1', old.memoryId, fresh.memoryId, 'contradiction');
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'what pump does the farmer use', limit: 10 });
+
+  assert.ok(recalled.every((m) => m.memoryId !== old.memoryId), 'superseded memory excluded from recall');
+  assert.ok(recalled.some((m) => m.memoryId === fresh.memoryId), 'fresh memory still returned');
+});
+
+test('superseded memory is still in store for auditability', async () => {
+  const mm = await makeManager();
+  const old = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'AWD trigger at -20cm' });
+  const fresh = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'AWD trigger at -15cm' });
+
+  await mm.supersede('f1', old.memoryId, fresh.memoryId, 'updated');
+  const rows = await mm.store.getEpisodicByIds('f1', [old.memoryId]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].supersededBy, fresh.memoryId);
+  assert.ok(rows[0].supersededAt);
+});
+
+test('adjudicateMemory returns supersedes for contradictions', async () => {
+  const mm = await makeManager();
+  const mockLLM = async () => ({ verdict: 'supersedes', reason: 'pump type changed' });
+  const result = await mm.adjudicateMemory('diesel pump', 'electric pump', mockLLM);
+  assert.equal(result, 'supersedes');
+});
+
+test('adjudicateMemory returns distinct for unrelated facts', async () => {
+  const mm = await makeManager();
+  const mockLLM = async () => ({ verdict: 'distinct', reason: 'different topics' });
+  const result = await mm.adjudicateMemory('diesel pump', 'pest damage', mockLLM);
+  assert.equal(result, 'distinct');
+});
+
+test('adjudicateMemory returns distinct on LLM failure', async () => {
+  const mm = await makeManager();
+  const failLLM = async () => { throw new Error('API down'); };
+  const result = await mm.adjudicateMemory('diesel pump', 'electric pump', failLLM);
+  assert.equal(result, 'distinct');
+});
+
+test('learnFromConversation supersedes contradictions via adjudication', async () => {
+  const mm = await makeManager();
+
+  // Existing memory: AWD trigger at -20cm (old, wrong)
+  await mm.recordEpisodic({
+    farmerId: 'f1',
+    type: 'observation',
+    text: 'Farmer set AWD trigger to minus 20cm',
+  });
+
+  let callCount = 0;
+  const mockExtract = async () => {
+    callCount++;
+    if (callCount === 1) {
+      // Extraction: new contradicting fact (sim ~0.64 — in adjudication range)
+      return {
+        profileFacts: [],
+        episodic: [{ type: 'observation', text: 'Farmer changed AWD trigger to minus 15cm after good results' }],
+      };
+    }
+    // Adjudication: LLM says supersedes
+    return { verdict: 'supersedes', reason: 'trigger depth updated' };
+  };
+
+  const result = await mm.learnFromConversation(
+    { farmerId: 'f1', paddyId: 'p1', transcript: 'Farmer: changed trigger\nAgent: noted' },
+    mockExtract
+  );
+
+  assert.equal(result.episodic.length, 1, 'new memory was saved');
+
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'AWD trigger depth', limit: 10 });
+  const texts = recalled.map((m) => m.text);
+  assert.ok(texts.some((t) => t.includes('minus 15cm')), 'new fact is recalled');
+  assert.ok(!texts.some((t) => t.includes('minus 20cm')), 'old contradicted fact is excluded');
+});
+
 test('purgeExpired removes expired memories and their vectors', async () => {
   const dir = tmp();
   const store = await new LocalStore(dir).init();

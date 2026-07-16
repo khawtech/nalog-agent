@@ -21,7 +21,7 @@
     "deploy:build": "bash deploy/fc-zip-build.sh",
     "deploy:fc": "node deploy/fc-deploy.mjs",
     "bench": "node scripts/benchmark-memory.mjs",
-    "test": "NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= DASHSCOPE_API_KEY= FIREBASE_PROJECT_ID= RERANK_MODEL= node --test"
+    "test": "NALOG_USE_DEMO=true NALOG_API_URL= AGENT_API_KEY= DASHSCOPE_API_KEY= FIREBASE_PROJECT_ID= RERANK_MODEL= STORAGE_DRIVER=local VECTOR_DRIVER=local node --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

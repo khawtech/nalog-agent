@@ -25,6 +25,7 @@ import logger from '../logger.js';
 const RECENCY_HALF_LIFE_DAYS = 120; // ~one season
 const WEIGHTS = { semantic: 0.6, recency: 0.25, reinforcement: 0.15 };
 const DEDUP_SIMILARITY_THRESHOLD = 0.85;
+const CONTRADICTION_CHECK_THRESHOLD = 0.50;
 
 export function currentSeason(date = new Date()) {
   const m = date.getUTCMonth() + 1; // Thailand: wet ≈ May–Oct, dry ≈ Nov–Apr
@@ -36,6 +37,10 @@ export function currentSeason(date = new Date()) {
 function recencyFactor(createdAt) {
   const ageDays = (Date.now() - new Date(createdAt).getTime()) / 86_400_000;
   return Math.exp((-Math.LN2 * Math.max(ageDays, 0)) / RECENCY_HALF_LIFE_DAYS);
+}
+
+function vectorSimilarity(hit) {
+  return config.vector.driver === 'dashvector' ? 1 - hit.score : hit.score;
 }
 
 export class MemoryManager {
@@ -155,9 +160,10 @@ export class MemoryManager {
       candidates = await this.store.listEpisodic(farmerId);
     }
 
+    const alive = candidates.filter((m) => !m.supersededBy);
     const memories = paddyId
-      ? candidates.filter((m) => !m.paddyId || m.paddyId === paddyId)
-      : candidates;
+      ? alive.filter((m) => !m.paddyId || m.paddyId === paddyId)
+      : alive;
     if (memories.length === 0) return [];
 
     const scored = memories.map((m) => {
@@ -175,6 +181,53 @@ export class MemoryManager {
     await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
 
     return top;
+  }
+
+  /**
+   * Mark an old memory as superseded by a new one. The old memory stays in
+   * storage for auditability but is excluded from recall results.
+   */
+  async supersede(farmerId, oldMemoryId, newMemoryId, reason) {
+    const rows = await this.store.getEpisodicByIds(farmerId, [oldMemoryId]);
+    const old = rows[0];
+    if (!old) return null;
+    old.supersededBy = newMemoryId;
+    old.supersededAt = new Date().toISOString();
+    old.supersessionReason = reason;
+    await this.store.putEpisodic(old);
+    logger.info({ oldMemoryId, newMemoryId, reason }, 'memory superseded (contradiction detected)');
+    return old;
+  }
+
+  /**
+   * LLM adjudication: does a new fact supersede (correct / contradict / update)
+   * an existing one, or are they distinct pieces of knowledge?
+   */
+  async adjudicateMemory(existingText, newText, extractFn) {
+    const fn = extractFn || chatJSON;
+    try {
+      const result = await fn({
+        tier: 'router',
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You compare two memories from a farming agent. Decide: does the NEW fact ' +
+              'SUPERSEDE (correct, update, or contradict) the OLD one, or are they DISTINCT ' +
+              '(different topics that can coexist)?\n' +
+              'Return JSON: {"verdict":"supersedes"|"distinct","reason":"one sentence"}.\n' +
+              'SUPERSEDE = the new fact makes the old one wrong, obsolete, or outdated.\n' +
+              'DISTINCT = they describe different things and both remain true.',
+          },
+          { role: 'user', content: `OLD: "${existingText}"\nNEW: "${newText}"` },
+        ],
+      });
+      return result?.verdict === 'supersedes' ? 'supersedes' : 'distinct';
+    } catch (err) {
+      logger.debug({ err: err.message }, 'adjudication failed, treating as distinct');
+      return 'distinct';
+    }
   }
 
   /**
@@ -289,35 +342,61 @@ export class MemoryManager {
         continue;
       }
 
+      let inserted = false;
       try {
         const vec = await embedOne(`${e.type || 'observation'}: ${e.text}`);
         const hits = await this.vector.query(vec, { topK: 1, filter: { farmerId } });
         if (hits.length > 0) {
-          const isDup = config.vector.driver === 'dashvector'
-            ? hits[0].score < (1 - DEDUP_SIMILARITY_THRESHOLD)
-            : hits[0].score > DEDUP_SIMILARITY_THRESHOLD;
-          if (isDup) {
+          const sim = vectorSimilarity(hits[0]);
+
+          // Tier 2: near-duplicate (sim ≥ 0.85) → reinforce, skip
+          if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
             const match = existing.find((m) => m.memoryId === hits[0].id);
             if (match) {
               await this.store.touchEpisodic(match, { reinforce: true }).catch(() => {});
-              logger.debug({ memoryId: hits[0].id, score: hits[0].score }, 'near-duplicate memory reinforced');
+              logger.debug({ memoryId: hits[0].id, sim: sim.toFixed(3) }, 'near-duplicate memory reinforced');
               continue;
+            }
+          }
+
+          // Tier 3: related but different (0.50 ≤ sim < 0.85) → LLM adjudication
+          if (sim >= CONTRADICTION_CHECK_THRESHOLD) {
+            const match = existing.find((m) => m.memoryId === hits[0].id && !m.supersededBy);
+            if (match) {
+              const verdict = await this.adjudicateMemory(match.text, e.text, extractFn);
+              if (verdict === 'supersedes') {
+                const mem = await this.recordEpisodic({
+                  farmerId, paddyId,
+                  type: e.type || 'observation',
+                  text: e.text,
+                  structured: { ...(e.structured || {}), supersedes: match.memoryId },
+                });
+                await this.supersede(farmerId, match.memoryId, mem.memoryId, 'LLM adjudication: new fact supersedes old');
+                saved.push(mem);
+                existingTexts.add(norm);
+                inserted = true;
+                logger.info(
+                  { old: match.memoryId, new: mem.memoryId, sim: sim.toFixed(3) },
+                  'contradiction detected and superseded'
+                );
+              }
             }
           }
         }
       } catch (err) {
-        logger.debug({ err: err.message }, 'dedup vector check failed, proceeding with insert');
+        logger.debug({ err: err.message }, 'dedup/adjudication check failed, proceeding with insert');
       }
 
-      const mem = await this.recordEpisodic({
-        farmerId,
-        paddyId,
-        type: e.type || 'observation',
-        text: e.text,
-        structured: e.structured || {},
-      });
-      saved.push(mem);
-      existingTexts.add(norm);
+      if (!inserted) {
+        const mem = await this.recordEpisodic({
+          farmerId, paddyId,
+          type: e.type || 'observation',
+          text: e.text,
+          structured: e.structured || {},
+        });
+        saved.push(mem);
+        existingTexts.add(norm);
+      }
     }
 
     await Promise.all(
