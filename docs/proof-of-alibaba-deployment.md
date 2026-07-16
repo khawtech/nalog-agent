@@ -65,7 +65,7 @@ required. It is deployed in Thailand (`ap-southeast-7`, Bangkok).
 This backend is not a standalone hackathon prototype — it is integrated into the live
 KhawTECH NaLog platform:
 
-- **Frontend:** The KhawTECH NaLog farmer web app ([nalog-app.khawtech.com](https://nalog-app.khawtech.com)) connects to this backend via the FC HTTP trigger URL (same API the bundled `public/` chat UI uses for local demos).
+- **Frontend:** The KhawTECH NaLog farmer dashboard connects to this backend via the FC HTTP trigger URL (same API the bundled `public/` chat UI uses for local demos).
 - **Farmer identity:** Firebase ID tokens (`X-NaLog-Token`) scope all memory and farm data to the authenticated farmer ([`jwt.js`](../src/utils/jwt.js), [`chat.js`](../src/routes/chat.js)).
 - **IoT pipeline:** Pump commands flow from this agent → ChirpStack → LoRaWAN gateway → physical pump relay in the field ([`chirpstack.js`](../src/integrations/chirpstack.js)).
 - **Sensor data:** The agent reads live sensor data from the NaLog REST API ([`nalog.js`](../src/integrations/nalog.js)) — the same API that powers the farmer-facing dashboard.
