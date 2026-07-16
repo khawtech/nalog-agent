@@ -13,7 +13,7 @@
 
 > **Production system — not a hackathon prototype.** This is the same backend deployed
 > on Alibaba Cloud Function Compute in Bangkok (`ap-southeast-7`), serving real farmers
-> in Isan, Thailand through the [KhawTECH](https://nalog-app.khawtech.com) NaLog platform. It
+> in Isan, Thailand through the [KhawTECH](https://nalog.khawtech.com) NaLog platform. It
 > handles real conversations, real sensor data, and real pump commands. The demo mode
 > included here uses a bundled dataset so anyone can run it locally — the production
 > path is one `STORAGE_DRIVER=alibaba` away.

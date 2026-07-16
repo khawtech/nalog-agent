@@ -5,7 +5,7 @@ This document points judges to the exact code that demonstrates the backend runs
 the running backend accompanies the submission, separate from the demo video.)
 
 > **This is a production system.** NaLog Agent is the same backend deployed on the live
-> [KhawTECH](https://nalog-app.khawtech.com) NaLog platform, serving real smallholder farmers in
+> [KhawTECH](https://nalog.khawtech.com) NaLog platform, serving real smallholder farmers in
 > Isan, Thailand. The codebase includes a demo mode for local development, but the
 > production path uses all five Alibaba Cloud services listed below.
 
