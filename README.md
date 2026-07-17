@@ -303,6 +303,10 @@ docs/           architecture, Alibaba proof, benchmark, integration guide, conne
 
 I wrote a blog post about this project: [Adding Qwen-powered Memory-Augmented Agent to NaLog platform](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/).
 
+## YouTube video
+
+I also recorded a YouTube video about this project: [Adding Qwen-powered Memory-Augmented Agent to NaLog platform](https://www.youtube.com/watch?v=dgA_fRj5AYM).
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Open source so any farmer co-op, NGO, or developer can run it.
