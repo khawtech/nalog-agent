@@ -1,0 +1,37 @@
+{
+  "append-only (Mem0-style)": {
+    "recallAt5": 0.9286,
+    "freshBeatsStale": 0.9231,
+    "staleAt5": 10
+  },
+  "recency only": {
+    "recallAt5": 0.8214,
+    "freshBeatsStale": 1,
+    "staleAt5": 0
+  },
+  "3-tier blend": {
+    "recallAt5": 1,
+    "freshBeatsStale": 1,
+    "staleAt5": 5
+  },
+  "3-tier + supersession (production)": {
+    "recallAt5": 1,
+    "freshBeatsStale": 1,
+    "staleAt5": 0
+  },
+  "3-tier − supersession (ablation)": {
+    "recallAt5": 1,
+    "freshBeatsStale": 1,
+    "staleAt5": 5
+  },
+  "3-tier − reinforcement (ablation)": {
+    "recallAt5": 0.9286,
+    "freshBeatsStale": 0.9231,
+    "staleAt5": 6
+  },
+  "supersession only (no blend)": {
+    "recallAt5": 0.9286,
+    "freshBeatsStale": 1,
+    "staleAt5": 0
+  }
+}

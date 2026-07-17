@@ -232,6 +232,74 @@ test('learnFromConversation supersedes contradictions via adjudication', async (
   assert.ok(!texts.some((t) => t.includes('minus 20cm')), 'old contradicted fact is excluded');
 });
 
+test('safety rescue floor: highly reinforced memories surface even below top-K', async () => {
+  const mm = await makeManager();
+  // Create 10 memories about a specific topic to fill the top-K
+  for (let i = 0; i < 10; i++) {
+    await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: `Diesel pump maintenance note number ${i} for the tractor shed` });
+  }
+  // Create a safety-critical memory on a completely different topic
+  const critical = await mm.recordEpisodic({ farmerId: 'f1', type: 'preference', text: 'CRITICAL flowering flood rule absolutely strict requirement always keep water level above zero' });
+  // Reinforce to safety level (≥5)
+  for (let i = 0; i < 5; i++) {
+    await mm.store.touchEpisodic(critical, { reinforce: true });
+  }
+
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'diesel pump maintenance tractor', limit: 5 });
+  assert.ok(recalled.length > 5, 'more than 5 returned because critical memory was rescued');
+  const criticalRecalled = recalled.find((m) => m.text.includes('flowering flood rule'));
+  assert.ok(criticalRecalled, 'safety-critical memory is rescued into results');
+  assert.ok(criticalRecalled._rescued, 'rescued flag is set');
+});
+
+test('recallWithTrace returns trace metadata', async () => {
+  const mm = await makeManager();
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Paddy 3 drains fast' });
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Paddy 2 has pest issues' });
+
+  const old = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Old fact about drainage' });
+  const fresh = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Updated drainage info' });
+  await mm.supersede('f1', old.memoryId, fresh.memoryId, 'updated');
+
+  const result = await mm.recallWithTrace({ farmerId: 'f1', query: 'drainage', limit: 3 });
+  assert.ok(result.memories.length > 0);
+  assert.ok(result.trace);
+  assert.ok(result.trace.candidatesConsidered > 0);
+  assert.equal(result.trace.supersededExcluded, 1);
+  assert.ok(Array.isArray(result.trace.memories));
+  assert.ok(result.trace.memories[0].memoryId);
+  assert.ok(typeof result.trace.memories[0].score === 'number');
+});
+
+test('buildContext includes memoryTrace', async () => {
+  const mm = await makeManager();
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'test memory' });
+  const ctx = await mm.buildContext({ farmerId: 'f1', query: 'test', limit: 5 });
+  assert.ok(ctx.memoryTrace, 'buildContext returns trace');
+  assert.ok(ctx.memoryTrace.candidatesConsidered >= 1);
+  assert.ok(ctx.memoryTrace.memories.length >= 1);
+});
+
+test('learnFromConversation returns diff stats', async () => {
+  const mm = await makeManager();
+  const mockExtract = async () => ({
+    profileFacts: [{ key: 'lang', value: 'th', confidence: 0.9 }],
+    episodic: [
+      { type: 'observation', text: 'New drainage observation' },
+      { type: 'preference', text: 'Prefers morning pumping' },
+    ],
+  });
+  const result = await mm.learnFromConversation(
+    { farmerId: 'f1', paddyId: 'p1', transcript: 'some talk' },
+    mockExtract
+  );
+  assert.ok(result.diff);
+  assert.equal(result.diff.newMemories, 2);
+  assert.equal(result.diff.profileUpdates, 1);
+  assert.equal(typeof result.diff.reinforced, 'number');
+  assert.equal(typeof result.diff.superseded, 'number');
+});
+
 test('purgeExpired removes expired memories and their vectors', async () => {
   const dir = tmp();
   const store = await new LocalStore(dir).init();

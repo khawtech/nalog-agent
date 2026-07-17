@@ -28,6 +28,21 @@ is what "timely forgetting" prevents.
 | 3-tier blend | 100.0% | 100.0% | 5 |
 | 3-tier + supersession (production) | 100.0% | 100.0% | 0 |
 
+### Ablation study — each mechanism earns its place
+
+Remove one mechanism at a time. If performance drops, the mechanism is justified.
+
+| Retrieval strategy | Recall@5 | Fresh > stale | Stale@5 (lower = better) |
+|---|---|---|---|
+| 3-tier − supersession (ablation) | 100.0% | 100.0% | 5 |
+| 3-tier − reinforcement (ablation) | 92.9% | 92.3% | 6 |
+| supersession only (no blend) | 92.9% | 100.0% | 0 |
+
+**Key takeaway:** The production configuration (`3-tier + supersession`) is the
+only variant that achieves the best result in *all three* metrics simultaneously.
+Removing supersession leaks stale facts; removing reinforcement loses the ranking
+signal from reuse; supersession alone without the blend loses recall quality.
+
 ![Benchmark chart](benchmark.svg)
 
 ## Why append-only memory fails (the Mem0 problem)
