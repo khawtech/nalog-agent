@@ -299,6 +299,10 @@ test/           116 automated tests (all deterministic, no cloud dependencies)
 docs/           architecture, Alibaba proof, benchmark, integration guide, connector API
 ```
 
+## Blog post
+
+I wrote a blog post about this project: [Adding Qwen-powered Memory-Augmented Agent to NaLog platform](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/).
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Open source so any farmer co-op, NGO, or developer can run it.
