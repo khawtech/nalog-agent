@@ -167,7 +167,7 @@ npm install --no-save @alicloud/fc20230330 @alicloud/openapi-client @alicloud/te
 ```
 ## Use it from any MCP client
 
-The agent's capabilities are also exposed as a **Model Context Protocol (MCP) server** over
+The agent's capabilities are exposed as a **Model Context Protocol (MCP) server** over
 stdio, so Claude Desktop, Cursor, or any other agent can drive NaLog directly — the same tool
 handlers power both the in-app ReAct loop and MCP (one implementation, two surfaces).
 
@@ -180,6 +180,41 @@ Tools exposed (all 9, same as the ReAct loop): `get_farm_overview`, `get_paddy_s
 `get_sensor_history`, `recall_memory`, `save_memory`, `update_profile`,
 `get_irrigation_history`, `analyze_field_photo` (Qwen-VL), `propose_irrigation`
 (human-in-the-loop). Implementation: [`src/mcp/server.js`](src/mcp/server.js).
+
+**Cursor / Claude Desktop** — add to `.cursor/mcp.json` or `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "nalog-agent": {
+      "command": "node",
+      "args": ["src/mcp/server.js"],
+      "cwd": "/path/to/nalog-agent",
+      "env": {
+        "DASHSCOPE_API_KEY": "sk-your-key",
+        "MCP_FARMER_ID": "your-user-id"
+      }
+    }
+  }
+}
+```
+
+`MCP_FARMER_ID` scopes all memory to a specific user. Without it, the demo farmer
+is used. Set `NALOG_USE_DEMO=true` (default) to use bundled farm data, or point
+`NALOG_API_URL` to your own platform.
+
+## Build on top of it
+
+This is an **open-source, MIT-licensed** MemoryAgent designed to be extended by
+agritech builders, co-ops, NGOs, and developers serving farming communities.
+
+- **[Integration guide](docs/INTEGRATION.md)** — three paths: MCP memory-only,
+  full MCP, or platform connector replacement.
+- **[Connector API reference](docs/CONNECTOR-API.md)** — the REST contract your
+  platform needs to implement (with example payloads).
+- **Swappable storage** — `local` (JSON file) for dev, `alibaba` (Tablestore +
+  DashVector) for production. Add your own driver by implementing the store/vector
+  interfaces documented in the integration guide.
 
 ## Tests, benchmark & CI
 
@@ -261,7 +296,7 @@ public/         web chat UI (streaming, tool trace, photo upload, memory panel)
 deploy/         Tablestore/DashVector provisioning, Function Compute deploy
 scripts/        selfcheck, MCP smoke, deployment smoke, memory benchmark, demo seed
 test/           116 automated tests (all deterministic, no cloud dependencies)
-docs/           architecture, Alibaba proof, benchmark, submission checklist
+docs/           architecture, Alibaba proof, benchmark, integration guide, connector API
 ```
 
 ## License
