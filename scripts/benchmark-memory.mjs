@@ -195,24 +195,38 @@ const blendScore = (m) =>
   WEIGHTS.recency * recency(m.createdAt) +
   WEIGHTS.reinforcement * Math.min(m.reinforcement / 5, 1);
 
-// Ablation flags: run with --no-supersession, --no-rerank, --no-memory to
-// prove each mechanism earns its place. Results are committed as a CI regression.
+// CLI flags: run with --no-supersession, --no-rerank, or --no-memory to run
+// only the matching ablation variant and see its impact in isolation.
+// Without flags, all strategies run (default for `npm run bench`).
 const args = new Set(process.argv.slice(2));
-const ablateSupersession = args.has('--no-supersession');
-const ablateRerank = args.has('--no-rerank');
-const ablateMemory = args.has('--no-memory');
+const filterSupersession = args.has('--no-supersession');
+const filterRerank = args.has('--no-rerank');
+const filterMemory = args.has('--no-memory');
+const hasFilter = filterSupersession || filterRerank || filterMemory;
 
-const STRATEGIES = {
+const ALL_STRATEGIES = {
   'append-only (Mem0-style)': (m) => m.semantic,
   'recency only': (m) => 0.7 * recency(m.createdAt) + 0.3 * Math.min(m.reinforcement / 5, 1),
   '3-tier blend': (m) => blendScore(m),
   '3-tier + supersession (production)': (m) => m.supersededBy ? -Infinity : blendScore(m),
-  // Ablation variants: each removes one mechanism to prove its value.
   '3-tier − supersession (ablation)': (m) => blendScore(m),
   '3-tier − reinforcement (ablation)': (m) =>
     WEIGHTS.semantic * m.semantic + WEIGHTS.recency * recency(m.createdAt),
   'supersession only (no blend)': (m) => m.supersededBy ? -Infinity : m.semantic,
 };
+
+// When a CLI flag is passed, run only the production baseline + the matching
+// ablation variant so the user can see the isolated effect of removing that
+// mechanism. Without flags, all strategies run.
+const STRATEGIES = hasFilter
+  ? Object.fromEntries(Object.entries(ALL_STRATEGIES).filter(([name]) => {
+      if (name === '3-tier + supersession (production)') return true;
+      if (filterSupersession && name === '3-tier − supersession (ablation)') return true;
+      if (filterRerank && name === 'append-only (Mem0-style)') return true;
+      if (filterMemory && name === 'append-only (Mem0-style)') return true;
+      return false;
+    }))
+  : ALL_STRATEGIES;
 
 const K = 5;
 const CORE_STRATEGIES = [
@@ -282,6 +296,7 @@ const pct = (v) => `${(v * 100).toFixed(1)}%`;
 const fmt = (v) => v.toFixed(3);
 
 const coreRows = CORE_STRATEGIES
+  .filter((name) => results[name])
   .map((name) => {
     const r = results[name];
     return `| ${name} | ${pct(r.recallAt5)} | ${pct(r.freshBeatsStale)} | ${r.staleAt5} |`;
@@ -289,6 +304,7 @@ const coreRows = CORE_STRATEGIES
   .join('\n');
 
 const ablationRows = ABLATION_STRATEGIES
+  .filter((name) => results[name])
   .map((name) => {
     const r = results[name];
     return `| ${name} | ${pct(r.recallAt5)} | ${pct(r.freshBeatsStale)} | ${r.staleAt5} |`;
@@ -443,23 +459,30 @@ ${decay}
 }
 
 const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
-fs.writeFileSync(path.join(repoRoot, 'docs', 'BENCHMARK.md'), md);
-fs.writeFileSync(path.join(repoRoot, 'docs', 'benchmark.svg'), svgChart());
 
-// Ablation regression file: CI checks that results are stable.
-const ablationJSON = {};
-for (const name of [...CORE_STRATEGIES, ...ABLATION_STRATEGIES]) {
-  const r = results[name];
-  ablationJSON[name] = {
-    recallAt5: +r.recallAt5.toFixed(4),
-    freshBeatsStale: +r.freshBeatsStale.toFixed(4),
-    staleAt5: r.staleAt5,
-  };
+// Only write docs/benchmark artifacts when running all strategies (no filter).
+// Filtered runs print results to stdout but don't overwrite the committed files.
+if (!hasFilter) {
+  fs.writeFileSync(path.join(repoRoot, 'docs', 'BENCHMARK.md'), md);
+  fs.writeFileSync(path.join(repoRoot, 'docs', 'benchmark.svg'), svgChart());
+
+  const ablationJSON = {};
+  for (const name of [...CORE_STRATEGIES, ...ABLATION_STRATEGIES]) {
+    const r = results[name];
+    if (!r) continue;
+    ablationJSON[name] = {
+      recallAt5: +r.recallAt5.toFixed(4),
+      freshBeatsStale: +r.freshBeatsStale.toFixed(4),
+      staleAt5: r.staleAt5,
+    };
+  }
+  fs.writeFileSync(
+    path.join(repoRoot, 'docs', 'benchmark-ablation.json'),
+    JSON.stringify(ablationJSON, null, 2) + '\n'
+  );
+} else {
+  console.log('\n(Filtered run — docs/BENCHMARK.md and ablation JSON not overwritten.)');
 }
-fs.writeFileSync(
-  path.join(repoRoot, 'docs', 'benchmark-ablation.json'),
-  JSON.stringify(ablationJSON, null, 2) + '\n'
-);
 
 console.log(md);
 console.log(`\nWrote docs/BENCHMARK.md, docs/benchmark.svg, and docs/benchmark-ablation.json (${TOTAL} memories, ${QUERIES.length} queries).`);

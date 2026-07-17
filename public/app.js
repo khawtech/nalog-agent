@@ -170,6 +170,12 @@ function handleEvent(live, event, data, setFinal) {
     case 'delta':
       live.append(data.text);
       break;
+    case 'memory_trace':
+      live.memoryTrace(data);
+      break;
+    case 'memory_diff':
+      renderMemoryDiff(data);
+      break;
     case 'final':
       setFinal(data);
       break;
@@ -201,6 +207,7 @@ function createLiveMessage() {
   const traceLines = [];
   let text = '';
   let thoughtChars = 0;
+  let traceData = null;
 
   return {
     setStatus(s) { status.textContent = s; scroll(); },
@@ -218,6 +225,15 @@ function createLiveMessage() {
       if (last >= 0) traceLines[last] += ok ? ' ✓' : ' ✗';
       status.textContent = `🔧 ${traceLines[last]}`;
     },
+    memoryTrace(data) {
+      traceData = data;
+      const parts = [];
+      if (data.candidates) parts.push(`${data.candidates} candidates`);
+      if (data.recalled) parts.push(`${data.recalled} recalled`);
+      if (data.supersededExcluded) parts.push(`${data.supersededExcluded} superseded`);
+      if (data.rescued) parts.push(`${data.rescued} safety-rescued`);
+      if (parts.length) status.textContent = `🧠 memory: ${parts.join(', ')}`;
+    },
     append(chunk) {
       if (text === '') status.remove();
       text += chunk;
@@ -234,6 +250,7 @@ function createLiveMessage() {
         return;
       }
       if (finalData) attachMeta(el, finalData);
+      if (traceData) attachMemoryTrace(el, traceData);
       scroll();
     },
   };
@@ -297,6 +314,51 @@ function renderMarkdown(raw) {
   s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
   return s;
+}
+
+function attachMemoryTrace(el, trace) {
+  const details = document.createElement('details');
+  details.className = 'memory-trace-details';
+  const summary = document.createElement('summary');
+  const parts = [];
+  if (trace.recalled) parts.push(`${trace.recalled} recalled`);
+  if (trace.supersededExcluded) parts.push(`${trace.supersededExcluded} superseded`);
+  if (trace.rescued) parts.push(`${trace.rescued} rescued`);
+  summary.textContent = `🧠 Memory trace: ${parts.join(', ') || 'no memories'}`;
+  details.appendChild(summary);
+  if (trace.recalledMemories?.length) {
+    trace.recalledMemories.forEach((m) => {
+      const row = document.createElement('div');
+      row.className = 'trace-row';
+      const label = m.rescued ? '🛟 rescued' : `score ${(m.score ?? 0).toFixed(2)}`;
+      row.textContent = `${label}: ${m.text?.length > 80 ? m.text.slice(0, 77) + '…' : m.text}`;
+      details.appendChild(row);
+    });
+  }
+  if (trace.supersededMemories?.length) {
+    trace.supersededMemories.forEach((m) => {
+      const row = document.createElement('div');
+      row.className = 'trace-row superseded';
+      row.textContent = `✕ superseded: ${m.text?.length > 80 ? m.text.slice(0, 77) + '…' : m.text}`;
+      details.appendChild(row);
+    });
+  }
+  el.appendChild(details);
+}
+
+function renderMemoryDiff(data) {
+  const parts = [];
+  if (data.newMemories) parts.push(`${data.newMemories} new`);
+  if (data.reinforced) parts.push(`${data.reinforced} reinforced`);
+  if (data.superseded) parts.push(`${data.superseded} superseded`);
+  if (data.profileUpdates) parts.push(`${data.profileUpdates} profile update${data.profileUpdates > 1 ? 's' : ''}`);
+  if (!parts.length) return;
+  const el = document.createElement('div');
+  el.className = 'memory-diff-banner';
+  el.textContent = `🧠 Memory updated: ${parts.join(', ')}`;
+  messagesEl.appendChild(el);
+  scroll();
+  loadMemory();
 }
 
 function setBusy(busy) {
