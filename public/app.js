@@ -228,7 +228,7 @@ function createLiveMessage() {
     memoryTrace(data) {
       traceData = data;
       const parts = [];
-      if (data.candidates) parts.push(`${data.candidates} candidates`);
+      if (data.candidatesConsidered) parts.push(`${data.candidatesConsidered} candidates`);
       if (data.recalled) parts.push(`${data.recalled} recalled`);
       if (data.supersededExcluded) parts.push(`${data.supersededExcluded} superseded`);
       if (data.rescued) parts.push(`${data.rescued} safety-rescued`);
@@ -321,25 +321,19 @@ function attachMemoryTrace(el, trace) {
   details.className = 'memory-trace-details';
   const summary = document.createElement('summary');
   const parts = [];
+  if (trace.candidatesConsidered) parts.push(`${trace.candidatesConsidered} candidates`);
   if (trace.recalled) parts.push(`${trace.recalled} recalled`);
   if (trace.supersededExcluded) parts.push(`${trace.supersededExcluded} superseded`);
   if (trace.rescued) parts.push(`${trace.rescued} rescued`);
+  if (trace.skippedBelowTopK) parts.push(`${trace.skippedBelowTopK} skipped`);
   summary.textContent = `🧠 Memory trace: ${parts.join(', ') || 'no memories'}`;
   details.appendChild(summary);
-  if (trace.recalledMemories?.length) {
-    trace.recalledMemories.forEach((m) => {
+  if (trace.memories?.length) {
+    trace.memories.forEach((m) => {
       const row = document.createElement('div');
       row.className = 'trace-row';
       const label = m.rescued ? '🛟 rescued' : `score ${(m.score ?? 0).toFixed(2)}`;
       row.textContent = `${label}: ${m.text?.length > 80 ? m.text.slice(0, 77) + '…' : m.text}`;
-      details.appendChild(row);
-    });
-  }
-  if (trace.supersededMemories?.length) {
-    trace.supersededMemories.forEach((m) => {
-      const row = document.createElement('div');
-      row.className = 'trace-row superseded';
-      row.textContent = `✕ superseded: ${m.text?.length > 80 ? m.text.slice(0, 77) + '…' : m.text}`;
       details.appendChild(row);
     });
   }
