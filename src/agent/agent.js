@@ -132,6 +132,10 @@ export class AgentService {
       this.store.getMessages(session.sessionId, HISTORY_WINDOW),
     ]);
 
+    if (memoryCtx.memoryTrace) {
+      onEvent?.({ type: 'memory_trace', source: 'context', ...memoryCtx.memoryTrace });
+    }
+
     const systemPrompt = buildSystemPrompt({
       memoryText: memoryCtx.text,
       farmOverview,
@@ -299,6 +303,14 @@ export class AgentService {
         farmerId,
         paddyId: focusPaddy,
         transcript: `Farmer: ${effectiveUserText}\nNaLog Agent: ${finalText}`,
+      })
+      .then((result) => {
+        if (result?.diff && onEvent) {
+          const d = result.diff;
+          if (d.newMemories || d.reinforced || d.superseded || d.profileUpdates) {
+            onEvent({ type: 'memory_diff', ...d });
+          }
+        }
       })
       .catch((err) => logger.warn({ err: err.message }, 'background learning failed'));
 

@@ -26,6 +26,7 @@ const RECENCY_HALF_LIFE_DAYS = 120; // ~one season
 const WEIGHTS = { semantic: 0.6, recency: 0.25, reinforcement: 0.15 };
 const DEDUP_SIMILARITY_THRESHOLD = 0.85;
 const CONTRADICTION_CHECK_THRESHOLD = 0.50;
+const SAFETY_RESCUE_REINFORCEMENT = 5;
 
 export function currentSeason(date = new Date()) {
   const m = date.getUTCMonth() + 1; // Thailand: wet ≈ May–Oct, dry ≈ Nov–Apr
@@ -178,6 +179,22 @@ export class MemoryManager {
 
     scored.sort((a, b) => b.score - a.score);
     const top = scored.slice(0, limit);
+
+    // Safety rescue floor: critical memories (reinforcement ≥ SAFETY_RESCUE_REINFORCEMENT)
+    // always surface even if they scored below the top-K cutoff. This prevents
+    // safety-critical knowledge (e.g. "keep flooded during flowering") from being
+    // missed just because the query didn't match semantically.
+    if (query) {
+      const topIds = new Set(top.map((m) => m.memoryId));
+      const rescued = scored.filter(
+        (m) => !topIds.has(m.memoryId) && (m.reinforcement || 0) >= SAFETY_RESCUE_REINFORCEMENT
+      );
+      for (const m of rescued) {
+        m._rescued = true;
+        top.push(m);
+      }
+    }
+
     await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
 
     return top;
@@ -261,13 +278,112 @@ export class MemoryManager {
   }
 
   /**
+   * Like recall() but also returns a trace of all candidates considered,
+   * including why each was included, excluded, or rescued.
+   */
+  async recallWithTrace({ farmerId, paddyId = null, query = '', limit = 5 }) {
+    let candidates = [];
+    const semanticById = new Map();
+    let supersededCount = 0;
+
+    if (query) {
+      let vectorHits = [];
+      try {
+        const qvec = await embedOne(query);
+        vectorHits = await this.vector.query(qvec, {
+          topK: Math.max(limit * 4, 12),
+          filter: { farmerId },
+        });
+      } catch (err) {
+        logger.warn({ err: err.message }, 'semantic query failed (trace)');
+      }
+
+      if (vectorHits.length > 0) {
+        const ids = vectorHits.map((h) => h.id);
+        candidates = await this.store.getEpisodicByIds(farmerId, ids);
+        const liveIds = new Set(candidates.map((m) => m.memoryId));
+        const orphanIds = ids.filter((id) => !liveIds.has(id));
+        if (orphanIds.length > 0) {
+          Promise.all(orphanIds.map((id) => this.vector.delete(id).catch(() => {})))
+            .then(() => logger.debug({ count: orphanIds.length }, 'cleaned orphan vectors'));
+        }
+        const reranked = await rerank(query, candidates.map((m) => m.text || ''));
+        if (reranked) {
+          const denom = Math.max(reranked.length, 1);
+          reranked.forEach((r, i) => semanticById.set(candidates[r.index]?.memoryId, 1 - i / denom));
+        } else {
+          const denom = Math.max(ids.length, 1);
+          ids.forEach((id, i) => semanticById.set(id, 1 - i / denom));
+        }
+      } else {
+        candidates = await this.store.listEpisodic(farmerId);
+      }
+    } else {
+      candidates = await this.store.listEpisodic(farmerId);
+    }
+
+    supersededCount = candidates.filter((m) => m.supersededBy).length;
+    const alive = candidates.filter((m) => !m.supersededBy);
+    const memories = paddyId ? alive.filter((m) => !m.paddyId || m.paddyId === paddyId) : alive;
+
+    const scored = memories.map((m) => {
+      const semantic = semanticById.get(m.memoryId) ?? 0;
+      const recency = recencyFactor(m.createdAt);
+      const reinforcement = Math.min((m.reinforcement || 0) / 5, 1);
+      const score = query && semanticById.size > 0
+        ? WEIGHTS.semantic * semantic + WEIGHTS.recency * recency + WEIGHTS.reinforcement * reinforcement
+        : 0.7 * recency + 0.3 * reinforcement;
+      return { ...m, semantic, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+    const skippedCount = Math.max(scored.length - limit, 0);
+
+    if (query) {
+      const topIds = new Set(top.map((m) => m.memoryId));
+      const rescued = scored.filter(
+        (m) => !topIds.has(m.memoryId) && (m.reinforcement || 0) >= SAFETY_RESCUE_REINFORCEMENT
+      );
+      for (const m of rescued) {
+        m._rescued = true;
+        top.push(m);
+      }
+    }
+
+    await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
+
+    return {
+      memories: top,
+      trace: {
+        candidatesConsidered: candidates.length,
+        supersededExcluded: supersededCount,
+        recalled: top.filter((m) => !m._rescued).length,
+        rescued: top.filter((m) => m._rescued).length,
+        skippedBelowTopK: skippedCount,
+        memories: top.map((m) => ({
+          memoryId: m.memoryId,
+          text: m.text,
+          score: +m.score.toFixed(3),
+          semantic: +(m.semantic ?? 0).toFixed(3),
+          recency: +recencyFactor(m.createdAt).toFixed(3),
+          reinforcement: m.reinforcement || 0,
+          rescued: Boolean(m._rescued),
+        })),
+      },
+    };
+  }
+
+  /**
    * Build a compact, token-efficient memory block for the system prompt.
    */
   async buildContext({ farmerId, paddyId = null, query = '', limit = 5 }) {
-    const [profile, memories] = await Promise.all([
+    const [profile, recallResult] = await Promise.all([
       this.getProfile(farmerId),
-      this.recall({ farmerId, paddyId, query, limit }),
+      this.recallWithTrace({ farmerId, paddyId, query, limit }),
     ]);
+
+    const { memories, trace } = recallResult;
 
     const profileLines = Object.entries(profile)
       .filter(([, v]) => v?.value !== undefined && v?.value !== '')
@@ -276,12 +392,14 @@ export class MemoryManager {
     const memoryLines = memories.map((m) => {
       const when = m.createdAt?.slice(0, 10);
       const tag = m.paddyId ? `[${m.paddyId}]` : '[farm]';
-      return `- (${when}, ${m.season}) ${tag} ${m.text}`;
+      const rescueTag = m._rescued ? ' [SAFETY-RESCUED]' : '';
+      return `- (${when}, ${m.season}) ${tag} ${m.text}${rescueTag}`;
     });
 
     return {
       profile,
       memories,
+      memoryTrace: trace,
       text:
         `KNOWN FARMER PROFILE:\n${profileLines.join('\n') || '- (none yet)'}\n\n` +
         `RELEVANT PAST EXPERIENCE (most relevant first):\n${memoryLines.join('\n') || '- (none yet)'}`,
@@ -405,11 +523,18 @@ export class MemoryManager {
       )
     );
 
+    const diff = {
+      newMemories: saved.length,
+      reinforced: episodic.length - saved.length,
+      superseded: saved.filter((m) => m.structured?.supersedes).length,
+      profileUpdates: profileFacts.length,
+    };
+
     logger.info(
-      { farmerId, facts: profileFacts.length, saved: saved.length, deduped: episodic.length - saved.length },
+      { farmerId, ...diff },
       'learned durable memory from conversation'
     );
-    return { profileFacts, episodic: saved };
+    return { profileFacts, episodic: saved, diff };
   }
 }
 

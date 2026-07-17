@@ -110,6 +110,53 @@ test('cross-session memory: second session knows what the first learned', async 
   assert.ok(s2.memoryUsed.some((m) => m.text.includes('31%')), 'memory crossed sessions');
 });
 
+test('memory_trace event is emitted with recall metadata', async () => {
+  const { agent, memory } = await makeAgent([{ content: 'ok' }]);
+  await memory.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'paddy drains fast' });
+
+  const events = [];
+  await agent.run({ farmerId: 'f1', userText: 'drainage', onEvent: (e) => events.push(e) });
+
+  const traceEvent = events.find((e) => e.type === 'memory_trace');
+  assert.ok(traceEvent, 'memory_trace event emitted');
+  assert.equal(traceEvent.source, 'context');
+  assert.ok(traceEvent.candidatesConsidered >= 1);
+  assert.ok(Array.isArray(traceEvent.memories));
+  assert.ok(traceEvent.memories[0].memoryId);
+  assert.ok(typeof traceEvent.memories[0].score === 'number');
+});
+
+test('memory_diff event is emitted after learning produces changes', async () => {
+  const dir = tmp();
+  const store = await new LocalStore(dir).init();
+  const memory = new MemoryManager(store, await new LocalVector(dir).init());
+
+  let call = 0;
+  const chatFn = async ({ usage, onDelta, stream }) => {
+    call += 1;
+    if (usage) { usage.total += 100; usage.calls += 1; }
+    return { role: 'assistant', content: 'ok', tool_calls: undefined };
+  };
+  // Real learning — returns diff
+  memory.learnFromConversation = async () => ({
+    profileFacts: [{ key: 'lang', value: 'th' }],
+    episodic: [{ memoryId: 'm1', text: 'new fact' }],
+    diff: { newMemories: 1, reinforced: 0, superseded: 0, profileUpdates: 1 },
+  });
+  const agent = new AgentService(memory, store, { chatFn });
+
+  const events = [];
+  await agent.run({ farmerId: 'f1', userText: 'hello', onEvent: (e) => events.push(e) });
+
+  // Learning is async — give it a tick
+  await new Promise((r) => setTimeout(r, 50));
+
+  const diffEvent = events.find((e) => e.type === 'memory_diff');
+  assert.ok(diffEvent, 'memory_diff event emitted');
+  assert.equal(diffEvent.newMemories, 1);
+  assert.equal(diffEvent.profileUpdates, 1);
+});
+
 test('unknown tools and handler failures degrade gracefully', async () => {
   const { agent } = await makeAgent([
     { tool_calls: [toolCall('does_not_exist', {})] },
