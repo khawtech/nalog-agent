@@ -83,13 +83,30 @@ export default class LocalStore {
       );
   }
 
-  async touchEpisodic(memory, { reinforce = false } = {}) {
+  async touchEpisodic(memory, { reinforce = false, setReinforcement } = {}) {
     const m = this.db.episodic[memory.memoryId];
     if (!m) return null;
     m.lastAccessed = new Date().toISOString();
-    if (reinforce) m.reinforcement = (m.reinforcement || 0) + 1;
+    if (setReinforcement != null) {
+      m.reinforcement = setReinforcement;
+    } else if (reinforce) {
+      m.reinforcement = (m.reinforcement || 0) + 1;
+    }
     this.#flush();
     return m;
+  }
+
+  async getRecentEpisodic(farmerId, paddyId, { limit = 1 } = {}) {
+    const now = Date.now();
+    return Object.values(this.db.episodic)
+      .filter((m) => {
+        if (m.farmerId !== farmerId) return false;
+        if (paddyId && m.paddyId && m.paddyId !== paddyId) return false;
+        if (m.expiresAt && new Date(m.expiresAt).getTime() < now) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, limit);
   }
 
   async purgeExpired() {

@@ -138,6 +138,9 @@ export default class TablestoreStore {
         { lastAccessed: memory.lastAccessed || memory.createdAt },
         { reinforcement: memory.reinforcement || 0 },
         { expiresAt: memory.expiresAt || '' },
+        { supersededBy: memory.supersededBy || '' },
+        { supersededAt: memory.supersededAt || '' },
+        { supersessionReason: memory.supersessionReason || '' },
       ],
     });
     return memory;
@@ -158,6 +161,9 @@ export default class TablestoreStore {
       lastAccessed: o.lastAccessed,
       reinforcement: Number(o.reinforcement) || 0,
       expiresAt: o.expiresAt || null,
+      supersededBy: o.supersededBy || undefined,
+      supersededAt: o.supersededAt || undefined,
+      supersessionReason: o.supersessionReason || undefined,
     };
     if (mem.expiresAt && new Date(mem.expiresAt).getTime() < now) return null;
     return mem;
@@ -211,10 +217,14 @@ export default class TablestoreStore {
     return memories;
   }
 
-  async touchEpisodic(memory, { reinforce = false } = {}) {
+  async touchEpisodic(memory, { reinforce = false, setReinforcement } = {}) {
     const lastAccessed = new Date().toISOString();
     const put = [{ lastAccessed }];
-    if (reinforce) put.push({ reinforcement: (memory.reinforcement || 0) + 1 });
+    if (setReinforcement != null) {
+      put.push({ reinforcement: setReinforcement });
+    } else if (reinforce) {
+      put.push({ reinforcement: (memory.reinforcement || 0) + 1 });
+    }
     await this.updateRow({
       tableName: TABLES.episodic,
       condition: ignoreCondition(),
@@ -222,6 +232,34 @@ export default class TablestoreStore {
       updateOfAttributeColumns: [{ PUT: put }],
     });
     return memory;
+  }
+
+  async getEpisodic(farmerId, memoryId) {
+    const res = await this.getRow({
+      tableName: TABLES.episodic,
+      primaryKey: [{ farmerId }, { memoryId }],
+    });
+    return this.#rowToMemory(res.row);
+  }
+
+  async getRecentEpisodic(farmerId, paddyId, { limit = 1 } = {}) {
+    const res = await this.getRange({
+      tableName: TABLES.episodic,
+      direction: TableStore.Direction.BACKWARD,
+      inclusiveStartPrimaryKey: [{ farmerId }, { memoryId: TableStore.INF_MAX }],
+      exclusiveEndPrimaryKey: [{ farmerId }, { memoryId: TableStore.INF_MIN }],
+      limit: limit * 3,
+    });
+    const now = Date.now();
+    const memories = [];
+    for (const row of res.rows || []) {
+      const mem = this.#rowToMemory(row, now);
+      if (!mem) continue;
+      if (paddyId && mem.paddyId && mem.paddyId !== paddyId) continue;
+      memories.push(mem);
+      if (memories.length >= limit) break;
+    }
+    return memories.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
   // Tablestore TTL handles physical deletion; vector cleanup is done lazily
