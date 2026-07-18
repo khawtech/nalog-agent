@@ -264,11 +264,12 @@ class YourStore {
   async init()                                    // → this
   async getProfile(farmerId)                      // → { key: { value, confidence, updatedAt } }
   async setProfileFact(farmerId, key, value, confidence)
-  async putEpisodic(memory)                       // upsert
-  async getEpisodic(memoryId)                     // → memory | null
+  async putEpisodic(memory)                       // upsert (incl. supersession fields)
+  async getEpisodic(farmerId, memoryId)           // → memory | null
   async getEpisodicByIds(farmerId, ids)           // → [memory]
   async listEpisodic(farmerId)                    // → [memory]
-  async touchEpisodic(memory, opts?)              // update lastAccessed, optionally reinforce
+  async getRecentEpisodic(farmerId, paddyId, opts?) // → [memory] (sorted by createdAt desc)
+  async touchEpisodic(memory, opts?)              // update lastAccessed; opts: { reinforce, setReinforcement }
   async purgeExpired()                             // → [removedMemoryId]
   async putProposal(proposal)
   async getProposal(proposalId)

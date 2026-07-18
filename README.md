@@ -55,7 +55,7 @@ The NaLog Agent is the agronomist with perfect memory in every farmer's pocket. 
 - **Forgets in a timely way** — memories decay with age and are physically expired via
   Tablestore TTL unless they keep proving useful (reinforcement). Measured, not claimed:
   see the [reproducible benchmark](docs/BENCHMARK.md).
-- **Safety rescue floor** — critical memories (reinforcement ≥ 5) always surface in
+- **Safety rescue floor** — critical memories (reinforcement >= 5) always surface in
   recall results even if they scored below the top-K cutoff. Ensures safety-critical
   knowledge (e.g. "keep flooded during flowering") is never missed on an unrelated query.
 - **Recalls within a tiny context window** — vector-first top-K recall (DashVector +
@@ -233,11 +233,11 @@ Tests are fully deterministic (demo mode, no API keys, no external services) and
 
 | Area | Tests |
 |---|---|
-| **Memory** | 3-tier recall, vector-first hydration, reinforcement, decay, purge + orphan vector cleanup, graceful fallbacks, **safety rescue floor** |
+| **Memory** | 3-tier recall, vector-first hydration, reinforcement, decay, safety rescue floor, purge + orphan vector cleanup, graceful fallbacks |
 | **Supersession** | LLM adjudication detects contradictions, supersede marks old memory, recall excludes superseded, auditability preserved, failure handling |
-| **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, contradiction adjudication + supersession, **diff stats**, failure handling |
-| **Memory trace** | `recallWithTrace` returns candidate/superseded/rescued counts, `buildContext` exposes trace, **`memory_trace` SSE event** emitted |
-| **Agent loop** | Scripted ReAct rounds: tool execution, chat-tier composition, proposals, event streaming, per-turn usage, cross-session memory, **`memory_diff` SSE event** |
+| **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, contradiction adjudication + supersession, diff stats, failure handling |
+| **Memory trace** | `recallWithTrace` returns candidate/superseded/rescued counts, `buildContext` exposes trace, `memory_trace` SSE event emitted |
+| **Agent loop** | Scripted ReAct rounds: tool execution, chat-tier composition, proposals, event streaming, per-turn usage, cross-session memory, `memory_diff` SSE event |
 | **Auth** | API-key gate, Firebase ID-token verification (signature, expiry, audience, issuer, alg-confusion), farmer scoping |
 | **Routes** | Health, chat validation, SSE streaming protocol, image validation, alert webhook, proposal ownership + lifecycle |
 | **Store / Vector** | Profile CRUD, episodic listing, `getEpisodicByIds`, TTL expiry, upsert/query/delete, filters, persistence |
@@ -250,7 +250,6 @@ ranks the current fact above its outdated twin, while a pure vector search leaks
 many stale memories into the context. An **ablation study** proves each mechanism earns
 its place: removing supersession leaks 5 stale facts; removing reinforcement drops
 Recall@5 to 92.9%; supersession alone without the blend also loses recall quality.
-Results are locked as `docs/benchmark-ablation.json` for CI regression.
 
 CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24 and includes `npm test`, `npm run check` (selfcheck), the MCP client smoke test, and `npm audit`. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
 
@@ -272,15 +271,14 @@ This project is submitted to **Track 1 — MemoryAgent**:
 - Autonomous post-turn learning (cheap `qwen3.6-flash` pass extracts durable facts) with
   **3-tier dedup**: exact text match, semantic near-duplicate (≥ 0.85), and contradiction
   adjudication (0.50–0.85) — preventing both duplicates and conflicting facts
-- **Safety rescue floor**: critical memories (reinforcement ≥ 5) always surface even at
+- **Safety rescue floor**: critical memories (reinforcement >= 5) always surface even at
   low semantic similarity — ensures "keep flooded during flowering" is never missed
 - **Explainable recall**: `memory_trace` SSE event shows which memories were recalled,
   their scores, what was superseded/excluded, and which were safety-rescued
 - **Memory diff**: `memory_diff` SSE event after each turn ("2 new, 1 reinforced,
   1 superseded") makes the memory system visible without trusting output
 - **Ablation study**: benchmark proves each mechanism (supersession, reinforcement,
-  blend) independently earns its place — locked as CI regression
-  (`docs/benchmark-ablation.json`)
+  blend) independently earns its place
 - **Memory lifecycle**: expired memories are purged from both store and vector index;
   orphan vector entries (e.g. from Tablestore TTL) are cleaned lazily during recall
 - Cross-session, cross-season memory accumulation
@@ -319,11 +317,11 @@ docs/           architecture, Alibaba proof, benchmark, integration guide, conne
 
 ## Blog post
 
-I wrote a blog post about this project: [Adding Qwen-powered Memory-Augmented Agent to NaLog platform](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/).
+[Adding a Qwen-powered Memory-Augmented Agent to the NaLog Platform](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/)
 
 ## YouTube video
 
-I also recorded a YouTube video about this project: [Adding Qwen-powered Memory-Augmented Agent to NaLog platform](https://www.youtube.com/watch?v=dgA_fRj5AYM).
+[Adding a Qwen-powered Memory-Augmented Agent to the NaLog Platform](https://www.youtube.com/watch?v=dgA_fRj5AYM)
 
 ## License
 

@@ -57,7 +57,7 @@ export default class LocalStore {
     return memory;
   }
 
-  async getEpisodic(memoryId) {
+  async getEpisodic(farmerId, memoryId) {
     return this.db.episodic[memoryId] || null;
   }
 
