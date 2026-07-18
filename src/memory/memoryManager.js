@@ -97,21 +97,10 @@ export class MemoryManager {
   }
 
   /**
-   * Retrieve the most relevant memories for the current situation.
-   *
-   * Vector-first: with a query we ask the vector index for candidate ids and
-   * hydrate only those rows via point lookups (BatchGetRow on Tablestore) —
-   * recall cost stays O(topK) regardless of how many seasons of memories a
-   * farmer has accumulated. Candidates are then re-ordered by the qwen3-rerank
-   * cross-encoder (when available) before the decay/reinforcement blend.
-   *
-   * Semantic leg uses RANK, not raw scores: DashVector cosine returns a
-   * distance (smaller = closer), the local index a similarity — rank is robust
-   * to either: best hit → 1.0, decreasing toward 0.
-   *
-   * @returns {Promise<Array<memory & {score:number, semantic:number}>>}
+   * Core recall pipeline shared by recall() and recallWithTrace().
+   * @returns {Promise<{memories: Array, candidates: Array, supersededCount: number, skippedBelowTopK: number}>}
    */
-  async recall({ farmerId, paddyId = null, query = '', limit = 5 }) {
+  async #recallCore({ farmerId, paddyId = null, query = '', limit = 5 }) {
     let candidates = [];
     const semanticById = new Map();
 
@@ -161,11 +150,14 @@ export class MemoryManager {
       candidates = await this.store.listEpisodic(farmerId);
     }
 
+    const supersededCount = candidates.filter((m) => m.supersededBy).length;
     const alive = candidates.filter((m) => !m.supersededBy);
     const memories = paddyId
       ? alive.filter((m) => !m.paddyId || m.paddyId === paddyId)
       : alive;
-    if (memories.length === 0) return [];
+    if (memories.length === 0) {
+      return { memories: [], candidates, supersededCount, skippedBelowTopK: 0 };
+    }
 
     const scored = memories.map((m) => {
       const semantic = semanticById.get(m.memoryId) ?? 0;
@@ -179,6 +171,7 @@ export class MemoryManager {
 
     scored.sort((a, b) => b.score - a.score);
     const top = scored.slice(0, limit);
+    const skippedBelowTopK = Math.max(scored.length - limit, 0);
 
     // Safety rescue floor: critical memories (reinforcement ≥ SAFETY_RESCUE_REINFORCEMENT)
     // always surface even if they scored below the top-K cutoff. This prevents
@@ -197,7 +190,27 @@ export class MemoryManager {
 
     await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
 
-    return top;
+    return { memories: top, candidates, supersededCount, skippedBelowTopK };
+  }
+
+  /**
+   * Retrieve the most relevant memories for the current situation.
+   *
+   * Vector-first: with a query we ask the vector index for candidate ids and
+   * hydrate only those rows via point lookups (BatchGetRow on Tablestore) —
+   * recall cost stays O(topK) regardless of how many seasons of memories a
+   * farmer has accumulated. Candidates are then re-ordered by the qwen3-rerank
+   * cross-encoder (when available) before the decay/reinforcement blend.
+   *
+   * Semantic leg uses RANK, not raw scores: DashVector cosine returns a
+   * distance (smaller = closer), the local index a similarity — rank is robust
+   * to either: best hit → 1.0, decreasing toward 0.
+   *
+   * @returns {Promise<Array<memory & {score:number, semantic:number}>>}
+   */
+  async recall({ farmerId, paddyId = null, query = '', limit = 5 }) {
+    const { memories } = await this.#recallCore({ farmerId, paddyId, query, limit });
+    return memories;
   }
 
   /**
@@ -282,86 +295,18 @@ export class MemoryManager {
    * including why each was included, excluded, or rescued.
    */
   async recallWithTrace({ farmerId, paddyId = null, query = '', limit = 5 }) {
-    let candidates = [];
-    const semanticById = new Map();
-    let supersededCount = 0;
-
-    if (query) {
-      let vectorHits = [];
-      try {
-        const qvec = await embedOne(query);
-        vectorHits = await this.vector.query(qvec, {
-          topK: Math.max(limit * 4, 12),
-          filter: { farmerId },
-        });
-      } catch (err) {
-        logger.warn({ err: err.message }, 'semantic query failed (trace)');
-      }
-
-      if (vectorHits.length > 0) {
-        const ids = vectorHits.map((h) => h.id);
-        candidates = await this.store.getEpisodicByIds(farmerId, ids);
-        const liveIds = new Set(candidates.map((m) => m.memoryId));
-        const orphanIds = ids.filter((id) => !liveIds.has(id));
-        if (orphanIds.length > 0) {
-          Promise.all(orphanIds.map((id) => this.vector.delete(id).catch(() => {})))
-            .then(() => logger.debug({ count: orphanIds.length }, 'cleaned orphan vectors'));
-        }
-        const reranked = await rerank(query, candidates.map((m) => m.text || ''));
-        if (reranked) {
-          const denom = Math.max(reranked.length, 1);
-          reranked.forEach((r, i) => semanticById.set(candidates[r.index]?.memoryId, 1 - i / denom));
-        } else {
-          const denom = Math.max(ids.length, 1);
-          ids.forEach((id, i) => semanticById.set(id, 1 - i / denom));
-        }
-      } else {
-        candidates = await this.store.listEpisodic(farmerId);
-      }
-    } else {
-      candidates = await this.store.listEpisodic(farmerId);
-    }
-
-    supersededCount = candidates.filter((m) => m.supersededBy).length;
-    const alive = candidates.filter((m) => !m.supersededBy);
-    const memories = paddyId ? alive.filter((m) => !m.paddyId || m.paddyId === paddyId) : alive;
-
-    const scored = memories.map((m) => {
-      const semantic = semanticById.get(m.memoryId) ?? 0;
-      const recency = recencyFactor(m.createdAt);
-      const reinforcement = Math.min((m.reinforcement || 0) / 5, 1);
-      const score = query && semanticById.size > 0
-        ? WEIGHTS.semantic * semantic + WEIGHTS.recency * recency + WEIGHTS.reinforcement * reinforcement
-        : 0.7 * recency + 0.3 * reinforcement;
-      return { ...m, semantic, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    const top = scored.slice(0, limit);
-    const skippedCount = Math.max(scored.length - limit, 0);
-
-    if (query) {
-      const topIds = new Set(top.map((m) => m.memoryId));
-      const rescued = scored.filter(
-        (m) => !topIds.has(m.memoryId) && (m.reinforcement || 0) >= SAFETY_RESCUE_REINFORCEMENT
-      );
-      for (const m of rescued) {
-        m._rescued = true;
-        top.push(m);
-      }
-    }
-
-    await Promise.all(top.map((m) => this.store.touchEpisodic(m).catch(() => {})));
+    const { memories, candidates, supersededCount, skippedBelowTopK } =
+      await this.#recallCore({ farmerId, paddyId, query, limit });
 
     return {
-      memories: top,
+      memories,
       trace: {
         candidatesConsidered: candidates.length,
         supersededExcluded: supersededCount,
-        recalled: top.filter((m) => !m._rescued).length,
-        rescued: top.filter((m) => m._rescued).length,
-        skippedBelowTopK: skippedCount,
-        memories: top.map((m) => ({
+        recalled: memories.filter((m) => !m._rescued).length,
+        rescued: memories.filter((m) => m._rescued).length,
+        skippedBelowTopK,
+        memories: memories.map((m) => ({
           memoryId: m.memoryId,
           text: m.text,
           score: +m.score.toFixed(3),
