@@ -4,12 +4,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Node 20+](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)
 
-> A **Qwen-powered MemoryAgent** that helps smallholder rice & sugarcane farmers in
-> Isan, Thailand make better, cheaper irrigation decisions — and gets smarter every
-> season by remembering each farmer and each paddy.
->
-> Built on **Alibaba Cloud** (Model Studio / Qwen, Function Compute, Tablestore,
-> DashVector) on top of the [NaLog / KhawTECH](https://khawtech.com) IoT irrigation platform.
+> My father-in-law died alone in a rice paddy in Isan, checking water levels by eye.
+> That's the trip millions of Thai farmers still make every day — walking kilometres
+> in 40 °C heat just to see if the pump is still running. Last season, the AWD sensors
+> we deployed on one family's paddies cut pumping by 31% with zero yield loss.
+> Every sensor we add is one less reason for that walk. **Hackathon funding goes
+> directly into sensors and LoRa gateways.**
+
+**NaLog Agent** is a **Qwen-powered MemoryAgent** that turns those sensors into
+personalised, remembered agronomic advice for smallholder rice and sugarcane farmers —
+an agronomist with perfect memory in every farmer's pocket. Built on **Alibaba Cloud**
+(Model Studio / Qwen, Function Compute, Tablestore, DashVector) on top of the
+[NaLog / KhawTECH](https://khawtech.com) IoT irrigation platform.
 
 > **Production system — not a hackathon prototype.** This is the same backend deployed
 > on Alibaba Cloud Function Compute in Bangkok (`ap-southeast-7`), serving real farmers
@@ -17,11 +23,6 @@
 > handles real conversations, real sensor data, and real pump commands. The demo mode
 > included here uses a bundled dataset so anyone can run it locally — the production
 > path is one `STORAGE_DRIVER=alibaba` away.
->
-> **Why this exists:** A family member died alone in a rice paddy, checking water by
-> eye (the kind of trip millions of farmers make daily). Every sensor we deploy is one
-> less reason for that walk. We're in active talks with local government in Isan to
-> expand coverage. Hackathon funding goes directly into sensors and LoRa gateways.
 
 **Hackathon track:** **Track 1 — MemoryAgent** (primary submission). The same codebase
 also includes an autonomous sensor-alert webhook (`POST /api/alerts`) that *could* qualify
@@ -45,7 +46,7 @@ raw data isn't advice. Good agronomic guidance has to be **hyper-local and remem
 *this* paddy drains faster after re-levelling, *this* farmer prefers to approve the pump
 himself near flowering, *last* season AWD here cut pumping 31% with no yield loss.
 
-The NaLog Agent is the agronomist with perfect memory in every farmer's pocket. It:
+NaLog Agent is the agronomist with perfect memory in every farmer's pocket. It:
 
 - **Accumulates experience** per farmer and per paddy, across sessions and seasons.
 - **Detects and supersedes contradictions** — when learning extracts a fact that
@@ -251,6 +252,8 @@ many stale memories into the context. An **ablation study** proves each mechanis
 its place: removing supersession leaks 5 stale facts; removing reinforcement drops
 Recall@5 to 92.9%; supersession alone without the blend also loses recall quality.
 
+![Benchmark: Recall@5 and stale-leak comparison across retrieval strategies](docs/benchmark.svg)
+
 CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on Node 20, 22 and 24 and includes `npm test`, `npm run check` (selfcheck), the MCP client smoke test, and `npm audit`. Node 24 is the active LTS dev/Docker target; Node 20 is kept in the matrix to match Alibaba Function Compute's bundled custom-runtime version.
 
 ## Track 1 rationale
@@ -295,7 +298,7 @@ human-in-the-loop approval → LoRaWAN pump command — but the hackathon entry 
 | **Technical Depth & Engineering (30%)** | Deliberate 4-tier Qwen routing (`qwen3.7-max` thinking + tool calls, `qwen3.6-plus` NLG, `qwen3.6-flash` extraction + adjudication, `qwen3-vl-plus` vision) with hybrid-thinking control and SSE streaming; **MCP server** exposing all 9 tools; a **benchmarked 3-tier decaying memory** with **LLM-adjudicated supersession** (vector-first recall + `qwen3-rerank`, recency decay, reinforcement, contradiction detection, Tablestore TTL, 3-tier dedup, orphan-vector cleanup) — **100% Recall@5, 0 stale facts served** vs Mem0-style baseline at 92.9% with 10 stale leaks; verified Firebase identity (RS256 against Google certs, no SDK); 122 automated tests + CI; **ablation study** proving each mechanism earns its place. |
 | **Innovation & AI Creativity (30%)** | **LLM-adjudicated contradiction supersession** — when a new fact contradicts an old memory (sim 0.50–0.85), a cheap `qwen3.6-flash` adjudication decides if the old fact is superseded; the old memory is kept for auditability but excluded from recall; **safety rescue floor** surfaces critical memories regardless of query similarity; **explainable recall** (`memory_trace` SSE) and **memory diff** (`memory_diff` SSE) make the memory system transparent; **ablation study** proves each mechanism earns its place; autonomous sensor-alert turns with human-in-the-loop actuation; cross-encoder reranking; field-photo grounding via Qwen-VL; modular storage/vector drivers; bounded ReAct loop with graceful degradation; autonomous post-turn learning with 3-tier dedup (exact + semantic + adjudication); token-budget discipline with concurrency-safe per-turn reporting and retry/backoff. |
 | **Problem Value & Impact (25%)** | **Production deployment** serving real farmers (Kut Chum, Yasothon) — water/diesel savings, methane reduction, food security for poor families; open-source (MIT), productizable across co-ops and SE Asia. |
-| **Presentation & Documentation (15%)** | Architecture diagram, live streaming UI with tool-trace transparency, reproducible benchmark with chart ([docs/BENCHMARK.md](docs/BENCHMARK.md)), full docs (`README`, `docs/ARCHITECTURE.md`, `docs/proof-of-alibaba-deployment.md`), [blog post](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/). |
+| **Presentation & Documentation (15%)** | Architecture diagram, live streaming UI with tool-trace transparency, reproducible benchmark with chart ([docs/BENCHMARK.md](docs/BENCHMARK.md)), full docs (`README`, `docs/ARCHITECTURE.md`, `docs/proof-of-alibaba-deployment.md`, [`docs/SECURITY.md`](docs/SECURITY.md)), [blog post](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/). |
 
 ## Project layout
 
@@ -312,7 +315,7 @@ public/         web chat UI (streaming, tool trace, photo upload, memory panel)
 deploy/         Tablestore/DashVector provisioning, Function Compute deploy
 scripts/        selfcheck, MCP smoke, deployment smoke, memory benchmark, demo seed
 test/           122 automated tests (all deterministic, no cloud dependencies)
-docs/           architecture, Alibaba proof, benchmark, integration guide, connector API
+docs/           architecture, Alibaba proof, benchmark, security, integration guide, connector API
 ```
 
 ## Blog post
