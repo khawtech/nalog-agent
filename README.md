@@ -332,7 +332,7 @@ docs/           architecture, Alibaba proof, benchmark, security, integration gu
 
 ## YouTube video
 
-[Adding a Qwen-powered Memory-Augmented Agent to the NaLog Platform](https://www.youtube.com/watch?v=dgA_fRj5AYM)
+[Adding a Qwen-powered Memory-Augmented Agent to the NaLog Platform](https://www.youtube.com/watch?v=tzedZsHiYXU)
 
 ## License
 
