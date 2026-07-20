@@ -15,7 +15,7 @@
 personalised, remembered agronomic advice for smallholder rice and sugarcane farmers —
 an agronomist with perfect memory in every farmer's pocket. Built on **Alibaba Cloud**
 (Model Studio / Qwen, Function Compute, Tablestore, DashVector) on top of the
-[NaLog / KhawTECH](https://khawtech.com) IoT irrigation platform.
+[NaLog / KhawTECH](https://nalog.khawtech.com) IoT irrigation platform.
 
 > **Production system — not a hackathon prototype.** This is the same backend deployed
 > on Alibaba Cloud Function Compute in Bangkok (`ap-southeast-7`), serving real farmers
