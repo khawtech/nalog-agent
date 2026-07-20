@@ -316,8 +316,47 @@ test('purgeExpired removes expired memories and their vectors', async () => {
   assert.equal(Object.keys(store.db.episodic).length, 1);
   assert.equal(vector.docs.size, 1);
 
-  const count = await mm.purgeExpired();
-  assert.equal(count, 1);
+  const result = await mm.purgeExpired();
+  assert.equal(result.purged, 1);
   assert.equal(Object.keys(store.db.episodic).length, 0);
   assert.equal(vector.docs.size, 0);
+});
+
+test('consolidate compresses multiple memories into a summary', async () => {
+  const mm = await makeManager();
+  const m1 = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Paddy 3 drains in 4 days' });
+  const m2 = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'Paddy 3 needs reflooding after 5 days' });
+
+  const mockLLM = async () => ({
+    summary: 'Paddy 3 drains in 4 days and needs reflooding after 5 days',
+    retained_facts: ['drain speed: 4 days', 'reflood interval: 5 days'],
+  });
+
+  const result = await mm.consolidate('f1', [m1, m2], mockLLM);
+  assert.ok(result);
+  assert.equal(result.type, 'consolidated');
+  assert.ok(result.text.includes('drains'));
+  assert.equal(result.structured.originalCount, 2);
+  assert.equal(result.structured.consolidatedFrom.length, 2);
+});
+
+test('consolidate returns null on LLM failure', async () => {
+  const mm = await makeManager();
+  const m1 = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'some memory' });
+  const failLLM = async () => { throw new Error('API down'); };
+  const result = await mm.consolidate('f1', [m1], failLLM);
+  assert.equal(result, null);
+});
+
+test('keyword scoring boosts exact term matches in recall', async () => {
+  const mm = await makeManager();
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'electric pump installed on paddy 3' });
+  await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'general farm maintenance note about equipment' });
+
+  const recalled = await mm.recallWithTrace({ farmerId: 'f1', query: 'electric pump paddy', limit: 5 });
+  assert.ok(recalled.memories.length > 0);
+  const pumpMemory = recalled.memories.find((m) => m.text.includes('electric pump'));
+  assert.ok(pumpMemory, 'memory with keyword match should be recalled');
+  const traceEntry = recalled.trace.memories.find((t) => t.memoryId === pumpMemory.memoryId);
+  assert.ok(traceEntry.keyword > 0, 'keyword score should be positive for matching terms');
 });

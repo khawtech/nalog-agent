@@ -1,12 +1,12 @@
 // ──────────────────────────────────────────────────────────────────────────
-// MemoryManager — the brain's memory system. Three tiers:
+// MemoryManager — the brain's memory system. Four tiers:
 //
 //   1. Profile memory (sticky)    — durable facts about a farmer
-//                                    (language, channel, crop, risk tolerance…)
 //   2. Episodic memory (decaying) — dated field experience tied to a paddy
-//                                    ("Paddy 3 drained +5→-15cm in 4.2 days")
-//   3. Semantic recall (vectors)  — retrieve the few most relevant memories
-//                                    for the current situation, then summarize.
+//   3. Semantic recall (vectors)  — vector-first + qwen3-rerank candidates
+//   4. Keyword recall (BM25-like) — term-overlap scoring for exact matches
+//
+// Recall blends: 0.50×semantic + 0.10×keyword + 0.25×recency + 0.15×reinforcement
 //
 // Forgetting is both soft (relevance decays with age, reinforced by reuse) and
 // hard (Tablestore TTL physically drops memories after ~2 seasons).
@@ -23,7 +23,7 @@ import config from '../config.js';
 import logger from '../logger.js';
 
 const RECENCY_HALF_LIFE_DAYS = 120; // ~one season
-const WEIGHTS = { semantic: 0.6, recency: 0.25, reinforcement: 0.15 };
+const WEIGHTS = { semantic: 0.50, keyword: 0.10, recency: 0.25, reinforcement: 0.15 };
 const DEDUP_SIMILARITY_THRESHOLD = 0.85;
 const CONTRADICTION_CHECK_THRESHOLD = 0.50;
 const SAFETY_RESCUE_REINFORCEMENT = 5;
@@ -42,6 +42,31 @@ function recencyFactor(createdAt) {
 
 function vectorSimilarity(hit) {
   return config.vector.driver === 'dashvector' ? 1 - hit.score : hit.score;
+}
+
+const KEYWORD_STOPWORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'in', 'on', 'at', 'to', 'for', 'of', 'with', 'and', 'or', 'not', 'no',
+  'what', 'how', 'does', 'do', 'should', 'can', 'why', 'when', 'where',
+  'this', 'that', 'it', 'its', 'my', 'his', 'her', 'he', 'she', 'they',
+  'has', 'have', 'had', 'from', 'about', 'by', 'as', 'if', 'but', 'so',
+  'than', 'then', 'now', 'just', 'also', 'very', 'much', 'more', 'most',
+]);
+
+function tokenize(text) {
+  return (text || '').toLowerCase().match(/[a-z0-9]+/g)
+    ?.filter(t => t.length > 1 && !KEYWORD_STOPWORDS.has(t)) || [];
+}
+
+/**
+ * BM25-inspired keyword overlap between a query and memory text.
+ * Returns 0..1: fraction of query terms found in the memory.
+ */
+function keywordScore(queryTokens, memoryText) {
+  if (queryTokens.length === 0) return 0;
+  const memTokens = new Set(tokenize(memoryText));
+  const hits = queryTokens.filter(t => memTokens.has(t)).length;
+  return hits / queryTokens.length;
 }
 
 export class MemoryManager {
@@ -159,14 +184,16 @@ export class MemoryManager {
       return { memories: [], candidates, supersededCount, skippedBelowTopK: 0 };
     }
 
+    const queryTokens = tokenize(query);
     const scored = memories.map((m) => {
       const semantic = semanticById.get(m.memoryId) ?? 0;
+      const keyword = query ? keywordScore(queryTokens, m.text) : 0;
       const recency = recencyFactor(m.createdAt);
       const reinforcement = Math.min((m.reinforcement || 0) / 5, 1);
       const score = query && semanticById.size > 0
-        ? WEIGHTS.semantic * semantic + WEIGHTS.recency * recency + WEIGHTS.reinforcement * reinforcement
+        ? WEIGHTS.semantic * semantic + WEIGHTS.keyword * keyword + WEIGHTS.recency * recency + WEIGHTS.reinforcement * reinforcement
         : 0.7 * recency + 0.3 * reinforcement;
-      return { ...m, semantic, score };
+      return { ...m, semantic, keyword, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
@@ -271,14 +298,85 @@ export class MemoryManager {
   }
 
   /**
-   * Remove expired memories from the store and their corresponding vector entries.
-   * For LocalStore this physically deletes rows past their expiresAt; for Tablestore
-   * TTL handles deletion and this returns 0 (orphan vectors are cleaned lazily
-   * during recall instead).
+   * Consolidate a group of memories into a single compressed summary before
+   * they are purged. The summary is stored as a new episodic memory with an
+   * extended TTL, preserving institutional knowledge even after individual
+   * observations expire.
    */
-  async purgeExpired() {
+  async consolidate(farmerId, memories, consolidateFn) {
+    if (!memories || memories.length === 0) return null;
+    const fn = consolidateFn || chatJSON;
+    const texts = memories.map((m) => {
+      const when = m.createdAt?.slice(0, 10) || 'unknown';
+      return `[${when}] ${m.text}`;
+    });
+    try {
+      const result = await fn({
+        tier: 'router',
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You consolidate expired field memories from a farming agent into a single concise summary. ' +
+              'Preserve the most important agronomic lessons. Return JSON: {"summary":"one concise paragraph","retained_facts":["fact1","fact2"]}.',
+          },
+          { role: 'user', content: `Memories to consolidate:\n${texts.join('\n')}` },
+        ],
+      });
+      if (!result?.summary) return null;
+      const consolidated = await this.recordEpisodic({
+        farmerId,
+        type: 'consolidated',
+        text: result.summary,
+        structured: {
+          consolidatedFrom: memories.map((m) => m.memoryId),
+          retainedFacts: result.retained_facts || [],
+          originalCount: memories.length,
+        },
+        ttlDays: 800,
+      });
+      logger.info(
+        { farmerId, consolidatedId: consolidated.memoryId, sourceCount: memories.length },
+        'consolidated expired memories into summary'
+      );
+      return consolidated;
+    } catch (err) {
+      logger.warn({ err: err.message }, 'consolidation failed, proceeding with purge');
+      return null;
+    }
+  }
+
+  /**
+   * Remove expired memories from the store and their corresponding vector entries.
+   * Before purging, attempts to consolidate expired memories into a compressed
+   * summary — preserving institutional knowledge even after individual observations
+   * expire. For LocalStore this physically deletes rows past their expiresAt; for
+   * Tablestore TTL handles deletion and this returns 0 (orphan vectors are cleaned
+   * lazily during recall instead).
+   */
+  async purgeExpired(consolidateFn) {
     const removedIds = await this.store.purgeExpired();
-    if (removedIds.length === 0) return 0;
+    if (removedIds.length === 0) return { purged: 0, consolidated: null };
+
+    // Attempt consolidation before permanent deletion (best-effort).
+    let consolidated = null;
+    if (removedIds.length >= 2) {
+      const farmerIds = new Set();
+      const memoriesByFarmer = new Map();
+      for (const id of removedIds) {
+        const rows = await this.store.getEpisodicByIds('*', [id]).catch(() => []);
+        for (const row of rows) {
+          farmerIds.add(row.farmerId);
+          if (!memoriesByFarmer.has(row.farmerId)) memoriesByFarmer.set(row.farmerId, []);
+          memoriesByFarmer.get(row.farmerId).push(row);
+        }
+      }
+      for (const [fid, mems] of memoriesByFarmer) {
+        consolidated = await this.consolidate(fid, mems, consolidateFn);
+      }
+    }
+
     await Promise.all(
       removedIds.map((id) =>
         this.vector.delete(id).catch((err) =>
@@ -287,7 +385,7 @@ export class MemoryManager {
       )
     );
     logger.info({ count: removedIds.length }, 'purged expired memories (store + vector)');
-    return removedIds.length;
+    return { purged: removedIds.length, consolidated };
   }
 
   /**
@@ -311,6 +409,7 @@ export class MemoryManager {
           text: m.text,
           score: +m.score.toFixed(3),
           semantic: +(m.semantic ?? 0).toFixed(3),
+          keyword: +(m.keyword ?? 0).toFixed(3),
           recency: +recencyFactor(m.createdAt).toFixed(3),
           reinforcement: m.reinforcement || 0,
           rescued: Boolean(m._rescued),

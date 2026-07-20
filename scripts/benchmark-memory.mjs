@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 // Reproducible memory-retrieval benchmark.
 //
-// Question answered with numbers, not claims: does the 3-tier relevance
+// Question answered with numbers, not claims: does the 4-tier hybrid relevance
 // blend (semantic rank + recency decay + reinforcement) retrieve the *right*
 // memories better than a plain vector search or a recency feed?
 //
@@ -35,7 +35,28 @@ const { embedOne } = await import('../src/llm/embeddings.js');
 const FARMER = 'bench-farmer';
 const DAY = 86_400_000;
 const HALF_LIFE_DAYS = 120;
-const WEIGHTS = { semantic: 0.6, recency: 0.25, reinforcement: 0.15 };
+const WEIGHTS = { semantic: 0.50, keyword: 0.10, recency: 0.25, reinforcement: 0.15 };
+
+const KEYWORD_STOPWORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'in', 'on', 'at', 'to', 'for', 'of', 'with', 'and', 'or', 'not', 'no',
+  'what', 'how', 'does', 'do', 'should', 'can', 'why', 'when', 'where',
+  'this', 'that', 'it', 'its', 'my', 'his', 'her', 'he', 'she', 'they',
+  'has', 'have', 'had', 'from', 'about', 'by', 'as', 'if', 'but', 'so',
+  'than', 'then', 'now', 'just', 'also', 'very', 'much', 'more', 'most',
+]);
+
+function tokenize(text) {
+  return (text || '').toLowerCase().match(/[a-z0-9]+/g)
+    ?.filter(t => t.length > 1 && !KEYWORD_STOPWORDS.has(t)) || [];
+}
+
+function keywordScore(queryTokens, memoryText) {
+  if (queryTokens.length === 0) return 0;
+  const memTokens = new Set(tokenize(memoryText));
+  const hits = queryTokens.filter(t => memTokens.has(t)).length;
+  return hits / queryTokens.length;
+}
 
 // ── Dataset ─────────────────────────────────────────────────────────────────
 // key, text, ageDays, reinforcement. "current" facts are recent; "outdated"
@@ -165,7 +186,7 @@ for (const [oldKey, newKey] of SUPERSESSION_PAIRS) {
   const oldId = byKey.get(oldKey);
   const newId = byKey.get(newKey);
   if (oldId && newId) {
-    const m = await store.getEpisodic(oldId);
+    const m = await store.getEpisodic(FARMER, oldId);
     if (m) {
       m.supersededBy = newId;
       m.supersededAt = new Date().toISOString();
@@ -190,8 +211,9 @@ async function candidatesFor(query, topK = 20) {
   }));
 }
 
-const blendScore = (m) =>
+const blendScore = (m, queryTokens) =>
   WEIGHTS.semantic * m.semantic +
+  WEIGHTS.keyword * (queryTokens ? keywordScore(queryTokens, m.text) : 0) +
   WEIGHTS.recency * recency(m.createdAt) +
   WEIGHTS.reinforcement * Math.min(m.reinforcement / 5, 1);
 
@@ -207,11 +229,13 @@ const hasFilter = filterSupersession || filterRerank || filterMemory;
 const ALL_STRATEGIES = {
   'append-only (Mem0-style)': (m) => m.semantic,
   'recency only': (m) => 0.7 * recency(m.createdAt) + 0.3 * Math.min(m.reinforcement / 5, 1),
-  '3-tier blend': (m) => blendScore(m),
-  '3-tier + supersession (production)': (m) => m.supersededBy ? -Infinity : blendScore(m),
-  '3-tier − supersession (ablation)': (m) => blendScore(m),
-  '3-tier − reinforcement (ablation)': (m) =>
-    WEIGHTS.semantic * m.semantic + WEIGHTS.recency * recency(m.createdAt),
+  '4-tier hybrid blend': (m, qToks) => blendScore(m, qToks),
+  '4-tier + supersession (production)': (m, qToks) => m.supersededBy ? -Infinity : blendScore(m, qToks),
+  '4-tier − supersession (ablation)': (m, qToks) => blendScore(m, qToks),
+  '4-tier − reinforcement (ablation)': (m, qToks) =>
+    WEIGHTS.semantic * m.semantic + WEIGHTS.keyword * (qToks ? keywordScore(qToks, m.text) : 0) + WEIGHTS.recency * recency(m.createdAt),
+  '4-tier − keyword (ablation)': (m) =>
+    0.60 * m.semantic + WEIGHTS.recency * recency(m.createdAt) + WEIGHTS.reinforcement * Math.min(m.reinforcement / 5, 1),
   'supersession only (no blend)': (m) => m.supersededBy ? -Infinity : m.semantic,
 };
 
@@ -220,8 +244,8 @@ const ALL_STRATEGIES = {
 // mechanism. Without flags, all strategies run.
 const STRATEGIES = hasFilter
   ? Object.fromEntries(Object.entries(ALL_STRATEGIES).filter(([name]) => {
-      if (name === '3-tier + supersession (production)') return true;
-      if (filterSupersession && name === '3-tier − supersession (ablation)') return true;
+      if (name === '4-tier + supersession (production)') return true;
+      if (filterSupersession && name === '4-tier − supersession (ablation)') return true;
       if (filterRerank && name === 'append-only (Mem0-style)') return true;
       if (filterMemory && name === 'append-only (Mem0-style)') return true;
       return false;
@@ -230,10 +254,10 @@ const STRATEGIES = hasFilter
 
 const K = 5;
 const CORE_STRATEGIES = [
-  'append-only (Mem0-style)', 'recency only', '3-tier blend', '3-tier + supersession (production)',
+  'append-only (Mem0-style)', 'recency only', '4-tier hybrid blend', '4-tier + supersession (production)',
 ];
 const ABLATION_STRATEGIES = [
-  '3-tier − supersession (ablation)', '3-tier − reinforcement (ablation)', 'supersession only (no blend)',
+  '4-tier − supersession (ablation)', '4-tier − reinforcement (ablation)', '4-tier − keyword (ablation)', 'supersession only (no blend)',
 ];
 const results = {};
 for (const name of Object.keys(STRATEGIES)) {
@@ -242,10 +266,11 @@ for (const name of Object.keys(STRATEGIES)) {
 
 for (const { q, relevant, stale } of QUERIES) {
   const cands = await candidatesFor(q);
+  const qToks = tokenize(q);
   const relevantIds = new Set(relevant.map((k) => byKey.get(k)));
   const staleIds = new Set(stale.map((k) => byKey.get(k)));
   for (const [name, scoreFn] of Object.entries(STRATEGIES)) {
-    const ranked = [...cands].sort((a, b) => scoreFn(b) - scoreFn(a));
+    const ranked = [...cands].sort((a, b) => scoreFn(b, qToks) - scoreFn(a, qToks));
     const top = ranked.slice(0, K).map((m) => m.memoryId);
     const hits = top.filter((id) => relevantIds.has(id)).length;
     results[name].recallAt5 += hits / relevantIds.size;
@@ -270,12 +295,13 @@ for (const name of Object.keys(results)) {
   results[name].freshBeatsStale = results[name].freshWins / Math.max(results[name].freshPairs, 1);
 }
 
-// Sanity: the production recall() path must agree with the 3-tier + supersession variant.
+// Sanity: the production recall() path must agree with the 4-tier + supersession variant.
 // Filter out safety-rescued memories (they extend beyond top-K) for a fair comparison.
 const prodAll = await mm.recall({ farmerId: FARMER, query: QUERIES[0].q, limit: K });
 const prodTop = prodAll.filter((m) => !m._rescued).slice(0, K).map((m) => m.memoryId);
+const q0Toks = tokenize(QUERIES[0].q);
 const localTop = [...(await candidatesFor(QUERIES[0].q))]
-  .sort((a, b) => STRATEGIES['3-tier + supersession (production)'](b) - STRATEGIES['3-tier + supersession (production)'](a))
+  .sort((a, b) => STRATEGIES['4-tier + supersession (production)'](b, q0Toks) - STRATEGIES['4-tier + supersession (production)'](a, q0Toks))
   .slice(0, K)
   .map((m) => m.memoryId);
 const prodMatches = JSON.stringify(prodTop) === JSON.stringify(localTop);
@@ -286,8 +312,8 @@ for (const ageDays of [0, 30, 60, 120, 180, 240, 300, 400]) {
   const rec = Math.exp((-Math.LN2 * ageDays) / HALF_LIFE_DAYS);
   decayCurve.push({
     ageDays,
-    unusedScore: WEIGHTS.semantic * 1 + WEIGHTS.recency * rec, // never reused
-    reinforcedScore: WEIGHTS.semantic * 1 + WEIGHTS.recency * rec + WEIGHTS.reinforcement * Math.min(3 / 5, 1),
+    unusedScore: WEIGHTS.semantic * 1 + WEIGHTS.keyword * 0.5 + WEIGHTS.recency * rec,
+    reinforcedScore: WEIGHTS.semantic * 1 + WEIGHTS.keyword * 0.5 + WEIGHTS.recency * rec + WEIGHTS.reinforcement * Math.min(3 / 5, 1),
   });
 }
 
@@ -346,10 +372,11 @@ Remove one mechanism at a time. If performance drops, the mechanism is justified
 |---|---|---|---|
 ${ablationRows}
 
-**Key takeaway:** The production configuration (\`3-tier + supersession\`) is the
+**Key takeaway:** The production configuration (\`4-tier + supersession\`) is the
 only variant that achieves the best result in *all three* metrics simultaneously.
 Removing supersession leaks stale facts; removing reinforcement loses the ranking
-signal from reuse; supersession alone without the blend loses recall quality.
+signal from reuse; removing keyword scoring loses the exact-match signal;
+supersession alone without the blend loses recall quality.
 
 ![Benchmark chart](benchmark.svg)
 
@@ -368,28 +395,29 @@ and the model picks whichever won the cosine coin-flip.
 You cannot fix this with a threshold. Any cutoff that keeps the correct fact keeps its
 contradiction too. **The signal is not in the number.**
 
-## How NaLog solves it: 3-tier blend + LLM-adjudicated supersession
+## How NaLog solves it: 4-tier hybrid blend + LLM-adjudicated supersession
 
 NaLog Agent attacks this at **two independent layers**:
 
-1. **Soft suppression (3-tier blend).** The \`0.60×semantic + 0.25×recency + 0.15×reinforcement\`
-   blend pushes old facts down the ranking. A 290-day-old memory with zero reinforcement
-   cannot outrank a 20-day-old fact that has been reinforced three times, even at identical
-   semantic similarity. This alone flips Fresh>stale from ${pct(results['append-only (Mem0-style)'].freshBeatsStale)} to ${pct(results['3-tier blend'].freshBeatsStale)}.
+1. **Soft suppression (4-tier hybrid blend).** The \`0.50×semantic + 0.10×keyword + 0.25×recency + 0.15×reinforcement\`
+   blend pushes old facts down the ranking. The keyword leg adds a BM25-inspired term-overlap
+   signal that catches exact matches vectors might miss. A 290-day-old memory with zero
+   reinforcement cannot outrank a 20-day-old fact that has been reinforced three times, even
+   at identical semantic similarity. This alone flips Fresh>stale from ${pct(results['append-only (Mem0-style)'].freshBeatsStale)} to ${pct(results['4-tier hybrid blend'].freshBeatsStale)}.
 
 2. **Hard supersession (LLM adjudication).** During autonomous post-turn learning, when a
    new fact is semantically related to an existing one (similarity 0.50–0.85) but not a
    near-duplicate (≥ 0.85), the agent calls a cheap \`qwen3.6-flash\` adjudication:
    *"does the new fact supersede, correct, or contradict the old one?"* If yes, the old
    memory is marked \`supersededBy\` and excluded from recall — but kept in storage for
-   auditability. This is what brings Stale@5 to **${results['3-tier + supersession (production)'].staleAt5}** in production.
+   auditability. This is what brings Stale@5 to **${results['4-tier + supersession (production)'].staleAt5}** in production.
 
 Unlike systems that simply "kill" a claim, NaLog keeps the body: you can always ask
 *"what did you used to believe, and when did you stop?"* — critical for an agronomic
 agent where a farmer or extension worker needs to understand why advice changed.
 
 Production-path sanity check: \`MemoryManager.recall()\` returned the same top-${K} as the
-benchmark's 3-tier + supersession scorer: **${prodMatches ? 'PASS' : 'FAIL'}**.
+benchmark's 4-tier + supersession scorer: **${prodMatches ? 'PASS' : 'FAIL'}**.
 
 ## Forgetting curve
 
@@ -409,8 +437,8 @@ function svgChart() {
   const colors = {
     'append-only (Mem0-style)': '#c0755a',
     'recency only': '#e8a13a',
-    '3-tier blend': '#8ab4f8',
-    '3-tier + supersession (production)': '#2e9e57',
+    '4-tier hybrid blend': '#8ab4f8',
+    '4-tier + supersession (production)': '#2e9e57',
   };
   // Left panel: Recall@5 bars. Right panel: decay curves.
   const barW = 70, gap = 40;

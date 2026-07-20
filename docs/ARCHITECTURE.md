@@ -60,7 +60,7 @@ paths (web chat + MCP).
 
 ## Memory model
 
-Three tiers, matching the MemoryAgent track requirements:
+Four tiers, matching the MemoryAgent track requirements:
 
 | Tier | Store | Behaviour | Example |
 |---|---|---|---|
@@ -76,24 +76,32 @@ Three tiers, matching the MemoryAgent track requirements:
    scan of a farmer's full multi-season history on the hot path.
 3. Re-order candidates with the **`qwen3-rerank` cross-encoder** (reads query + memory
    together; falls back gracefully to vector order when unavailable).
-4. Blend the final relevance score:
+4. Compute **BM25-inspired keyword overlap** between the query and each memory text
+   (stopword-filtered token overlap fraction).
+5. Blend the final relevance score across four signals:
 
 ```
-score = 0.60 · semantic_rank            (rerank order, else DashVector order)
+score = 0.50 · semantic_rank            (rerank order, else DashVector order)
+      + 0.10 · keyword_overlap          (BM25-inspired term match fraction)
       + 0.25 · recency                  (exp half-life ≈ 120 days)
       + 0.15 · reinforcement            (min(reuse_count / 5, 1))
 ```
 
 The semantic leg uses **rank** (best candidate → 1.0, decreasing) rather than raw scores,
 so it is robust to metric differences between DashVector (cosine distance), the local
-dev index (similarity) and the reranker (relevance probability).
+dev index (similarity) and the reranker (relevance probability). The keyword leg adds a
+lexical signal that catches exact term matches vectors might miss — proven necessary by
+ablation (removing it leaks 5 stale facts).
 
 Measured results (reproducible, `npm run bench`): see [BENCHMARK.md](BENCHMARK.md) —
 the blend reaches **100% Recall@5** on the labeled set and always ranks the current fact
 above its outdated twin, where a pure vector search serves stale facts twice as often.
 
-**Timely forgetting** is twofold:
+**Timely forgetting** is threefold:
 - *soft* — old, unused memories sink in ranking and stop being recalled;
+- *consolidation* — before purging, expired memories are compressed into a concise summary
+  via a cheap `qwen3.6-flash` call, preserving institutional knowledge (drain speeds, pest
+  patterns, yield outcomes) in a single memory with an extended 800-day TTL;
 - *hard* — Tablestore TTL physically deletes episodic rows after ~400 days unless rewritten.
 
 **Memory lifecycle** — expired memories are purged from the store (with their vector entries

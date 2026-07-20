@@ -59,8 +59,9 @@ NaLog Agent is the agronomist with perfect memory in every farmer's pocket. It:
 - **Safety rescue floor** — critical memories (reinforcement >= 5) always surface in
   recall results even if they scored below the top-K cutoff. Ensures safety-critical
   knowledge (e.g. "keep flooded during flowering") is never missed on an unrelated query.
-- **Recalls within a tiny context window** — vector-first top-K recall (DashVector +
-  `qwen3-rerank` cross-encoder) + summarisation, so it works for offline-first,
+- **Recalls within a tiny context window** — 4-tier hybrid recall: vector-first top-K
+  (DashVector + `qwen3-rerank` cross-encoder) + BM25-inspired keyword overlap + recency
+  decay + reinforcement scoring, then summarisation — so it works for offline-first,
   low-bandwidth rural deployments.
 - **Sees the field** — attach a photo and `qwen3-vl-plus` reads crop condition, water,
   pests and weeds into the reasoning loop.
@@ -75,12 +76,14 @@ NaLog Agent is the agronomist with perfect memory in every farmer's pocket. It:
   client (Claude, Cursor, other agents) can use NaLog's tools. See [Use it from any MCP
   client](#use-it-from-any-mcp-client).
 
+**Judges:** Start with [`docs/JUDGE-GUIDE.md`](docs/JUDGE-GUIDE.md) for a 2-minute overview.
+
 ## Architecture
 
 ![Architecture](docs/arch.png)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and the
-[3-tier memory model](docs/ARCHITECTURE.md#memory-model).
+[4-tier hybrid memory model](docs/ARCHITECTURE.md#memory-model).
 
 ## Alibaba Cloud services used (proof of deployment)
 
@@ -225,7 +228,7 @@ agritech builders, co-ops, NGOs, and developers serving farming communities.
 ## Tests, benchmark & CI
 
 ```bash
-npm test       # 122 tests (memory, supersession, safety rescue, store, vector, routes, tools, auth, agent loop, streaming, …)
+npm test       # 125 tests (memory, supersession, consolidation, keyword scoring, safety rescue, store, vector, routes, tools, auth, agent loop, streaming, …)
 npm run check  # boots app, hits endpoints
 npm run bench  # reproducible memory-retrieval benchmark → docs/BENCHMARK.md + chart
 ```
@@ -234,9 +237,10 @@ Tests are fully deterministic (demo mode, no API keys, no external services) and
 
 | Area | Tests |
 |---|---|
-| **Memory** | 3-tier recall, vector-first hydration, reinforcement, decay, safety rescue floor, purge + orphan vector cleanup, graceful fallbacks |
+| **Memory** | 4-tier hybrid recall, vector-first hydration, keyword scoring, reinforcement, decay, safety rescue floor, consolidation, purge + orphan vector cleanup, graceful fallbacks |
 | **Supersession** | LLM adjudication detects contradictions, supersede marks old memory, recall excludes superseded, auditability preserved, failure handling |
 | **Memory learning** | Autonomous post-turn extraction (mock LLM), dedup by exact text and semantic similarity, contradiction adjudication + supersession, diff stats, failure handling |
+| **Consolidation** | Expired memories compressed into summaries before purge, LLM failure handling, metadata preservation |
 | **Memory trace** | `recallWithTrace` returns candidate/superseded/rescued counts, `buildContext` exposes trace, `memory_trace` SSE event emitted |
 | **Agent loop** | Scripted ReAct rounds: tool execution, chat-tier composition, proposals, event streaming, per-turn usage, cross-session memory, `memory_diff` SSE event |
 | **Auth** | API-key gate, Firebase ID-token verification (signature, expiry, audience, issuer, alg-confusion), farmer scoping |
@@ -245,12 +249,13 @@ Tests are fully deterministic (demo mode, no API keys, no external services) and
 | **Rerank** | DashScope parsing, disabled/offline/failure fallbacks |
 | **Domain** | Crop calendar (rice & sugarcane), demo dataset, NaLog connector, embeddings, tool handlers |
 
-The **memory benchmark** ([docs/BENCHMARK.md](docs/BENCHMARK.md)) shows why the 3-tier
-blend exists: on a labeled two-season dataset it reaches **100% Recall@5** and always
-ranks the current fact above its outdated twin, while a pure vector search leaks twice as
-many stale memories into the context. An **ablation study** proves each mechanism earns
-its place: removing supersession leaks 5 stale facts; removing reinforcement drops
-Recall@5 to 92.9%; supersession alone without the blend also loses recall quality.
+The **memory benchmark** ([docs/BENCHMARK.md](docs/BENCHMARK.md)) shows why the 4-tier
+hybrid blend exists: on a labeled two-season dataset it reaches **100% Recall@5** and
+always ranks the current fact above its outdated twin, while a pure vector search leaks
+twice as many stale memories into the context. An **ablation study** proves each mechanism
+earns its place: removing supersession leaks 5 stale facts; removing keyword scoring
+also leaks 5; removing reinforcement drops Recall@5 to 96.4%; supersession alone without
+the blend also loses recall quality.
 
 ![Benchmark: Recall@5 and stale-leak comparison across retrieval strategies](docs/benchmark.svg)
 
@@ -260,10 +265,12 @@ CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on N
 
 This project is submitted to **Track 1 — MemoryAgent**:
 
-- 3-tier memory (profile / episodic / semantic) with explicit relevance scoring,
-  **benchmarked** on a labeled dataset ([docs/BENCHMARK.md](docs/BENCHMARK.md))
+- **4-tier hybrid recall** (profile / episodic / semantic / keyword) with explicit
+  relevance scoring, **benchmarked** on a labeled dataset ([docs/BENCHMARK.md](docs/BENCHMARK.md))
 - Vector-first recall (DashVector candidates → Tablestore point lookups →
-  `qwen3-rerank` cross-encoder) — O(topK) regardless of history size
+  `qwen3-rerank` cross-encoder → BM25-inspired keyword overlap) — O(topK) regardless
+  of history size. Four scoring signals blended:
+  `0.50×semantic + 0.10×keyword + 0.25×recency + 0.15×reinforcement`
 - **LLM-adjudicated supersession**: when a new fact contradicts an existing memory
   (similarity 0.50–0.85), a cheap `qwen3.6-flash` call adjudicates whether the old
   fact is superseded. The old memory is marked `supersededBy` and excluded from
@@ -277,11 +284,12 @@ This project is submitted to **Track 1 — MemoryAgent**:
 - **Safety rescue floor**: critical memories (reinforcement >= 5) always surface even at
   low semantic similarity — ensures "keep flooded during flowering" is never missed
 - **Explainable recall**: `memory_trace` SSE event shows which memories were recalled,
-  their scores, what was superseded/excluded, and which were safety-rescued
+  their scores (semantic, keyword, recency, reinforcement), what was superseded/excluded,
+  and which were safety-rescued
 - **Memory diff**: `memory_diff` SSE event after each turn ("2 new, 1 reinforced,
   1 superseded") makes the memory system visible without trusting output
 - **Ablation study**: benchmark proves each mechanism (supersession, reinforcement,
-  blend) independently earns its place
+  keyword, blend) independently earns its place
 - **Memory lifecycle**: expired memories are purged from both store and vector index;
   orphan vector entries (e.g. from Tablestore TTL) are cleaned lazily during recall
 - Cross-session, cross-season memory accumulation
@@ -295,8 +303,8 @@ human-in-the-loop approval → LoRaWAN pump command — but the hackathon entry 
 
 | Criterion | Where it shows up |
 |---|---|
-| **Technical Depth & Engineering (30%)** | Deliberate 4-tier Qwen routing (`qwen3.7-max` thinking + tool calls, `qwen3.6-plus` NLG, `qwen3.6-flash` extraction + adjudication, `qwen3-vl-plus` vision) with hybrid-thinking control and SSE streaming; **MCP server** exposing all 9 tools; a **benchmarked 3-tier decaying memory** with **LLM-adjudicated supersession** (vector-first recall + `qwen3-rerank`, recency decay, reinforcement, contradiction detection, Tablestore TTL, 3-tier dedup, orphan-vector cleanup) — **100% Recall@5, 0 stale facts served** vs Mem0-style baseline at 92.9% with 10 stale leaks; verified Firebase identity (RS256 against Google certs, no SDK); 122 automated tests + CI; **ablation study** proving each mechanism earns its place. |
-| **Innovation & AI Creativity (30%)** | **LLM-adjudicated contradiction supersession** — when a new fact contradicts an old memory (sim 0.50–0.85), a cheap `qwen3.6-flash` adjudication decides if the old fact is superseded; the old memory is kept for auditability but excluded from recall; **safety rescue floor** surfaces critical memories regardless of query similarity; **explainable recall** (`memory_trace` SSE) and **memory diff** (`memory_diff` SSE) make the memory system transparent; **ablation study** proves each mechanism earns its place; autonomous sensor-alert turns with human-in-the-loop actuation; cross-encoder reranking; field-photo grounding via Qwen-VL; modular storage/vector drivers; bounded ReAct loop with graceful degradation; autonomous post-turn learning with 3-tier dedup (exact + semantic + adjudication); token-budget discipline with concurrency-safe per-turn reporting and retry/backoff. |
+| **Technical Depth & Engineering (30%)** | Deliberate 4-tier Qwen routing (`qwen3.7-max` thinking + tool calls, `qwen3.6-plus` NLG, `qwen3.6-flash` extraction + adjudication, `qwen3-vl-plus` vision) with hybrid-thinking control and SSE streaming; **MCP server** exposing all 9 tools; a **benchmarked 4-tier hybrid recall** with **LLM-adjudicated supersession** (vector-first + `qwen3-rerank` cross-encoder + BM25 keyword overlap + recency decay + reinforcement + contradiction detection + Tablestore TTL + 3-tier dedup + orphan-vector cleanup) — **100% Recall@5, 0 stale facts served** vs Mem0-style baseline at 92.9% with 10 stale leaks; verified Firebase identity (RS256 against Google certs, no SDK); 125 automated tests + CI; **ablation study** proving each mechanism independently earns its place. |
+| **Innovation & AI Creativity (30%)** | **4-tier hybrid recall** (semantic + keyword + recency + reinforcement) fuses dense vector retrieval with BM25-inspired lexical matching — each signal proven necessary by ablation; **LLM-adjudicated contradiction supersession** — when a new fact contradicts an old memory (sim 0.50–0.85), a cheap `qwen3.6-flash` adjudication decides if the old fact is superseded; the old memory is kept for auditability but excluded from recall; **safety rescue floor** surfaces critical memories regardless of query similarity; **explainable recall** (`memory_trace` SSE) and **memory diff** (`memory_diff` SSE) make the memory system transparent; autonomous sensor-alert turns with human-in-the-loop actuation; cross-encoder reranking; field-photo grounding via Qwen-VL; modular storage/vector drivers; bounded ReAct loop with graceful degradation; autonomous post-turn learning with 3-tier dedup (exact + semantic + adjudication); token-budget discipline with concurrency-safe per-turn reporting and retry/backoff. |
 | **Problem Value & Impact (25%)** | **Production deployment** serving real farmers (Kut Chum, Yasothon) — water/diesel savings, methane reduction, food security for poor families; open-source (MIT), productizable across co-ops and SE Asia. |
 | **Presentation & Documentation (15%)** | Architecture diagram, live streaming UI with tool-trace transparency, reproducible benchmark with chart ([docs/BENCHMARK.md](docs/BENCHMARK.md)), full docs (`README`, `docs/ARCHITECTURE.md`, `docs/proof-of-alibaba-deployment.md`, [`docs/SECURITY.md`](docs/SECURITY.md)), [blog post](https://albertoroura.com/adding-qwen-powered-memory-augmented-agent-to-nalog-platform/). |
 
@@ -314,7 +322,7 @@ src/
 public/         web chat UI (streaming, tool trace, photo upload, memory panel)
 deploy/         Tablestore/DashVector provisioning, Function Compute deploy
 scripts/        selfcheck, MCP smoke, deployment smoke, memory benchmark, demo seed
-test/           122 automated tests (all deterministic, no cloud dependencies)
+test/           125 automated tests (all deterministic, no cloud dependencies)
 docs/           architecture, Alibaba proof, benchmark, security, integration guide, connector API
 ```
 

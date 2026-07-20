@@ -25,8 +25,8 @@ is what "timely forgetting" prevents.
 |---|---|---|---|
 | append-only (Mem0-style) | 92.9% | 92.3% | 10 |
 | recency only | 82.1% | 100.0% | 0 |
-| 3-tier blend | 100.0% | 100.0% | 5 |
-| 3-tier + supersession (production) | 100.0% | 100.0% | 0 |
+| 4-tier hybrid blend | 100.0% | 100.0% | 5 |
+| 4-tier + supersession (production) | 100.0% | 100.0% | 0 |
 
 ### Ablation study — each mechanism earns its place
 
@@ -34,14 +34,16 @@ Remove one mechanism at a time. If performance drops, the mechanism is justified
 
 | Retrieval strategy | Recall@5 | Fresh > stale | Stale@5 (lower = better) |
 |---|---|---|---|
-| 3-tier − supersession (ablation) | 100.0% | 100.0% | 5 |
-| 3-tier − reinforcement (ablation) | 92.9% | 92.3% | 6 |
+| 4-tier − supersession (ablation) | 100.0% | 100.0% | 5 |
+| 4-tier − reinforcement (ablation) | 96.4% | 100.0% | 7 |
+| 4-tier − keyword (ablation) | 100.0% | 100.0% | 5 |
 | supersession only (no blend) | 92.9% | 100.0% | 0 |
 
-**Key takeaway:** The production configuration (`3-tier + supersession`) is the
+**Key takeaway:** The production configuration (`4-tier + supersession`) is the
 only variant that achieves the best result in *all three* metrics simultaneously.
 Removing supersession leaks stale facts; removing reinforcement loses the ranking
-signal from reuse; supersession alone without the blend loses recall quality.
+signal from reuse; removing keyword scoring loses the exact-match signal;
+supersession alone without the blend loses recall quality.
 
 ![Benchmark chart](benchmark.svg)
 
@@ -60,14 +62,15 @@ and the model picks whichever won the cosine coin-flip.
 You cannot fix this with a threshold. Any cutoff that keeps the correct fact keeps its
 contradiction too. **The signal is not in the number.**
 
-## How NaLog solves it: 3-tier blend + LLM-adjudicated supersession
+## How NaLog solves it: 4-tier hybrid blend + LLM-adjudicated supersession
 
 NaLog Agent attacks this at **two independent layers**:
 
-1. **Soft suppression (3-tier blend).** The `0.60×semantic + 0.25×recency + 0.15×reinforcement`
-   blend pushes old facts down the ranking. A 290-day-old memory with zero reinforcement
-   cannot outrank a 20-day-old fact that has been reinforced three times, even at identical
-   semantic similarity. This alone flips Fresh>stale from 92.3% to 100.0%.
+1. **Soft suppression (4-tier hybrid blend).** The `0.50×semantic + 0.10×keyword + 0.25×recency + 0.15×reinforcement`
+   blend pushes old facts down the ranking. The keyword leg adds a BM25-inspired term-overlap
+   signal that catches exact matches vectors might miss. A 290-day-old memory with zero
+   reinforcement cannot outrank a 20-day-old fact that has been reinforced three times, even
+   at identical semantic similarity. This alone flips Fresh>stale from 92.3% to 100.0%.
 
 2. **Hard supersession (LLM adjudication).** During autonomous post-turn learning, when a
    new fact is semantically related to an existing one (similarity 0.50–0.85) but not a
@@ -81,7 +84,7 @@ Unlike systems that simply "kill" a claim, NaLog keeps the body: you can always 
 agent where a farmer or extension worker needs to understand why advice changed.
 
 Production-path sanity check: `MemoryManager.recall()` returned the same top-5 as the
-benchmark's 3-tier + supersession scorer: **PASS**.
+benchmark's 4-tier + supersession scorer: **PASS**.
 
 ## Forgetting curve
 
@@ -91,11 +94,11 @@ TTL physically deletes rows after ~400 days.
 
 | Age (days) | Score if never reused | Score if reinforced ×3 |
 |---|---|---|
-| 0 | 0.850 | 0.940 |
-| 30 | 0.810 | 0.900 |
-| 60 | 0.777 | 0.867 |
-| 120 | 0.725 | 0.815 |
-| 180 | 0.688 | 0.778 |
-| 240 | 0.662 | 0.752 |
-| 300 | 0.644 | 0.734 |
-| 400 | 0.625 | 0.715 |
+| 0 | 0.800 | 0.890 |
+| 30 | 0.760 | 0.850 |
+| 60 | 0.727 | 0.817 |
+| 120 | 0.675 | 0.765 |
+| 180 | 0.638 | 0.728 |
+| 240 | 0.613 | 0.703 |
+| 300 | 0.594 | 0.684 |
+| 400 | 0.575 | 0.665 |

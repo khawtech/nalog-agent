@@ -9,25 +9,30 @@
     "freshBeatsStale": 1,
     "staleAt5": 0
   },
-  "3-tier blend": {
+  "4-tier hybrid blend": {
     "recallAt5": 1,
     "freshBeatsStale": 1,
     "staleAt5": 5
   },
-  "3-tier + supersession (production)": {
+  "4-tier + supersession (production)": {
     "recallAt5": 1,
     "freshBeatsStale": 1,
     "staleAt5": 0
   },
-  "3-tier − supersession (ablation)": {
+  "4-tier − supersession (ablation)": {
     "recallAt5": 1,
     "freshBeatsStale": 1,
     "staleAt5": 5
   },
-  "3-tier − reinforcement (ablation)": {
-    "recallAt5": 0.9286,
-    "freshBeatsStale": 0.9231,
-    "staleAt5": 6
+  "4-tier − reinforcement (ablation)": {
+    "recallAt5": 0.9643,
+    "freshBeatsStale": 1,
+    "staleAt5": 7
+  },
+  "4-tier − keyword (ablation)": {
+    "recallAt5": 1,
+    "freshBeatsStale": 1,
+    "staleAt5": 5
   },
   "supersession only (no blend)": {
     "recallAt5": 0.9286,
