@@ -15,7 +15,7 @@ Do you have your own AI reasoning loop (Claude, Cursor, LangChain, etc.)?
 
 | Path | Effort | What you get | What you provide |
 |---|---|---|---|
-| **1. MCP memory-only** | ~30 min | 3-tier memory with decay, contradiction detection, benchmarked recall | Your own domain tools + reasoning |
+| **1. MCP memory-only** | ~30 min | Multi-tier memory with 4-signal hybrid recall, decay, contradiction detection, benchmarked | Your own domain tools + reasoning |
 | **2. Full MCP** | ~1 hour | All 9 tools (memory + sensor reads + irrigation proposals) | A REST API matching the connector contract |
 | **3. Platform connector** | ~1 day | The full agent (ReAct loop, web UI, SSE streaming, alerts, HITL) | A REST API or replacement `nalog.js` |
 
@@ -77,8 +77,8 @@ cp .env.example .env
 
 ### Memory features you get for free
 
-- **3-tier recall scoring**: 60% semantic (vector + cross-encoder rerank), 25% recency
-  (120-day half-life), 15% reinforcement (use-count).
+- **4-signal recall scoring**: 50% semantic (vector + cross-encoder rerank), 10% keyword
+  (BM25-inspired term overlap), 25% recency (120-day half-life), 15% reinforcement (use-count).
 - **Contradiction detection**: new facts in similarity range 0.50–0.85 trigger LLM
   adjudication; superseded memories are kept for audit but excluded from recall.
 - **Near-duplicate dedup**: exact text match and semantic similarity ≥ 0.85 reinforce

@@ -60,7 +60,7 @@ paths (web chat + MCP).
 
 ## Memory model
 
-Four tiers, matching the MemoryAgent track requirements:
+Three storage tiers, four-signal hybrid recall — matching the MemoryAgent track requirements:
 
 | Tier | Store | Behaviour | Example |
 |---|---|---|---|

@@ -29,7 +29,7 @@ also includes an autonomous sensor-alert webhook (`POST /api/alerts`) that *coul
 for Track 4 — Autopilot Agent, but this project is entered as a MemoryAgent. See
 [Track 1 rationale](#track-1-rationale) below.
 
-> **Built by [Alberto Roura](https://albertoroura.com)** — **Alibaba Cloud MVP for 8
+> **Built by [Alberto Roura](https://albertoroura.com)** — **[Alibaba Cloud MVP](https://mvp.alibabacloud.com/mvp/detail/105) for 8
 > consecutive years (2018–2026)** and **Alibaba Cloud MVP of the Year 2019** (awarded
 > globally at the MVP Global Summit). Apsara Conference organizer & co-presenter (covered
 > the Hanguang 800 AI chip launch on Alibaba's channels) and a **Qwen VIP**. This project
@@ -265,7 +265,7 @@ CI runs on every push and PR via [GitHub Actions](.github/workflows/ci.yml) on N
 
 This project is submitted to **Track 1 — MemoryAgent**:
 
-- **4-tier hybrid recall** (profile / episodic / semantic / keyword) with explicit
+- **4-tier hybrid recall** (semantic + keyword + recency + reinforcement) with explicit
   relevance scoring, **benchmarked** on a labeled dataset ([docs/BENCHMARK.md](docs/BENCHMARK.md))
 - Vector-first recall (DashVector candidates → Tablestore point lookups →
   `qwen3-rerank` cross-encoder → BM25-inspired keyword overlap) — O(topK) regardless
@@ -313,7 +313,7 @@ human-in-the-loop approval → LoRaWAN pump command — but the hackathon entry 
 ```
 src/
   llm/          Qwen client (Model Studio): chat/stream/JSON, embeddings, qwen3-rerank
-  memory/       3-tier memory: store (local|Tablestore) + vector (local|DashVector)
+  memory/       memory system: store (local|Tablestore) + vector (local|DashVector)
   agent/        ReAct loop (streaming events), tools (incl. Qwen-VL photo), prompts
   integrations/ NaLog read connector, ChirpStack downlink, crop calendar, demo data
   routes/       chat (SSE), proposals (HITL, ownership), alerts (autonomous), health
