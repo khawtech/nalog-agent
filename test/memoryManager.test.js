@@ -360,3 +360,22 @@ test('keyword scoring boosts exact term matches in recall', async () => {
   const traceEntry = recalled.trace.memories.find((t) => t.memoryId === pumpMemory.memoryId);
   assert.ok(traceEntry.keyword > 0, 'keyword score should be positive for matching terms');
 });
+
+test('reindexVectors embeds live memories and skips superseded rows', async () => {
+  const mm = await makeManager();
+  const live = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'paddy drains fast' });
+  const old = await mm.recordEpisodic({ farmerId: 'f1', type: 'observation', text: 'old drainage note' });
+  await mm.supersede('f1', old.memoryId, live.memoryId, 'test');
+
+  const dry = await mm.reindexVectors({ dryRun: true });
+  assert.equal(dry.total, 1);
+  assert.equal(dry.indexed, 1);
+  assert.equal(dry.skipped, 1);
+
+  const result = await mm.reindexVectors();
+  assert.equal(result.indexed, 1);
+  assert.equal(result.failed, 0);
+
+  const recalled = await mm.recall({ farmerId: 'f1', query: 'drainage speed', limit: 3 });
+  assert.ok(recalled.some((m) => m.memoryId === live.memoryId));
+});

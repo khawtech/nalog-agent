@@ -18,6 +18,7 @@
     "smoke:deploy": "node scripts/smoke-deployment.mjs",
     "seed": "node scripts/seed-demo.js",
     "provision": "node deploy/provision.js",
+    "reindex:vectors": "node scripts/reindex-vectors.mjs",
     "deploy:build": "bash deploy/fc-zip-build.sh",
     "deploy:fc": "node deploy/fc-deploy.mjs",
     "bench": "node scripts/benchmark-memory.mjs",

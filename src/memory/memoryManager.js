@@ -16,7 +16,7 @@
 import { nanoid } from 'nanoid';
 import { getStore } from './store/index.js';
 import { getVectorStore } from './vector/index.js';
-import { embedOne } from '../llm/embeddings.js';
+import { embed, embedOne } from '../llm/embeddings.js';
 import { chatJSON } from '../llm/dashscope.js';
 import { rerank } from '../llm/rerank.js';
 import config from '../config.js';
@@ -345,6 +345,53 @@ export class MemoryManager {
       logger.warn({ err: err.message }, 'consolidation failed, proceeding with purge');
       return null;
     }
+  }
+
+  /**
+   * Re-embed episodic memories from the store into the vector index. Use after
+   * provisioning a fresh DashVector cluster or changing embedding models.
+   */
+  async reindexVectors({ farmerId = null, dryRun = false, batchSize = 10 } = {}) {
+    const all = await this.store.listAllEpisodic(farmerId ? { farmerId } : {});
+    const memories = all.filter((m) => m.text?.trim() && !m.supersededBy);
+    const skipped = all.length - memories.length;
+    let indexed = 0;
+    let failed = 0;
+
+    for (let i = 0; i < memories.length; i += batchSize) {
+      const batch = memories.slice(i, i + batchSize);
+      if (dryRun) {
+        indexed += batch.length;
+        continue;
+      }
+      try {
+        const texts = batch.map((m) => `${m.type || 'observation'}: ${m.text}`);
+        const vectors = await embed(texts);
+        await Promise.all(
+          batch.map((m, j) =>
+            this.vector.upsert(m.memoryId, vectors[j], {
+              farmerId: m.farmerId,
+              paddyId: m.paddyId || '',
+              memoryId: m.memoryId,
+            })
+          )
+        );
+        indexed += batch.length;
+        logger.info(
+          { indexed, total: memories.length, farmerId: farmerId || 'all' },
+          'reindexed episodic memory batch'
+        );
+      } catch (err) {
+        failed += batch.length;
+        logger.warn({ err: err.message, offset: i, size: batch.length }, 'reindex batch failed');
+      }
+    }
+
+    logger.info(
+      { total: memories.length, indexed, failed, skipped, dryRun, farmerId: farmerId || 'all' },
+      'vector reindex complete'
+    );
+    return { total: memories.length, indexed, failed, skipped };
   }
 
   /**

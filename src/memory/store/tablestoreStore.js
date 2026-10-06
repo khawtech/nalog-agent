@@ -170,20 +170,35 @@ export default class TablestoreStore {
   }
 
   async listEpisodic(farmerId, { paddyId } = {}) {
-    const res = await this.getRange({
-      tableName: TABLES.episodic,
-      direction: TableStore.Direction.FORWARD,
-      inclusiveStartPrimaryKey: [{ farmerId }, { memoryId: TableStore.INF_MIN }],
-      exclusiveEndPrimaryKey: [{ farmerId }, { memoryId: TableStore.INF_MAX }],
-      limit: 1000,
-    });
+    return this.listAllEpisodic({ farmerId, paddyId });
+  }
+
+  async listAllEpisodic({ farmerId, paddyId } = {}) {
     const now = Date.now();
     const memories = [];
-    for (const row of res.rows || []) {
-      const mem = this.#rowToMemory(row, now);
-      if (!mem) continue;
-      if (paddyId && mem.paddyId && mem.paddyId !== paddyId) continue;
-      memories.push(mem);
+    let startPK = farmerId
+      ? [{ farmerId }, { memoryId: TableStore.INF_MIN }]
+      : [{ farmerId: TableStore.INF_MIN }, { memoryId: TableStore.INF_MIN }];
+    const endPK = farmerId
+      ? [{ farmerId }, { memoryId: TableStore.INF_MAX }]
+      : [{ farmerId: TableStore.INF_MAX }, { memoryId: TableStore.INF_MAX }];
+
+    while (true) {
+      const res = await this.getRange({
+        tableName: TABLES.episodic,
+        direction: TableStore.Direction.FORWARD,
+        inclusiveStartPrimaryKey: startPK,
+        exclusiveEndPrimaryKey: endPK,
+        limit: 200,
+      });
+      for (const row of res.rows || []) {
+        const mem = this.#rowToMemory(row, now);
+        if (!mem) continue;
+        if (paddyId && mem.paddyId && mem.paddyId !== paddyId) continue;
+        memories.push(mem);
+      }
+      if (!res.next_start_primary_key) break;
+      startPK = res.next_start_primary_key;
     }
     return memories;
   }

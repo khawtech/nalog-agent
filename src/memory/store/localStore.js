@@ -62,9 +62,13 @@ export default class LocalStore {
   }
 
   async listEpisodic(farmerId, { paddyId } = {}) {
+    return this.listAllEpisodic({ farmerId, paddyId });
+  }
+
+  async listAllEpisodic({ farmerId, paddyId } = {}) {
     const now = Date.now();
     return Object.values(this.db.episodic).filter((m) => {
-      if (m.farmerId !== farmerId) return false;
+      if (farmerId && m.farmerId !== farmerId) return false;
       if (paddyId && m.paddyId && m.paddyId !== paddyId) return false;
       if (m.expiresAt && new Date(m.expiresAt).getTime() < now) return false;
       return true;

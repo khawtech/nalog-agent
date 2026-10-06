@@ -84,6 +84,20 @@ test('purgeExpired returns removed memory IDs', async () => {
   assert.equal(remaining[0].memoryId, 'valid1');
 });
 
+test('listAllEpisodic returns memories across farmers', async () => {
+  const store = await new LocalStore(tmpDir()).init();
+  const now = new Date().toISOString();
+  await store.putEpisodic({ memoryId: 'm1', farmerId: 'f1', text: 'a', createdAt: now });
+  await store.putEpisodic({ memoryId: 'm2', farmerId: 'f2', text: 'b', createdAt: now });
+
+  const all = await store.listAllEpisodic();
+  assert.equal(all.length, 2);
+
+  const f1 = await store.listAllEpisodic({ farmerId: 'f1' });
+  assert.equal(f1.length, 1);
+  assert.equal(f1[0].memoryId, 'm1');
+});
+
 test('proposals lifecycle', async () => {
   const store = await new LocalStore(tmpDir()).init();
   await store.putProposal({ proposalId: 'x1', sessionId: 's1', status: 'pending', createdAt: new Date().toISOString() });

@@ -1,0 +1,34 @@
+ROSTemplateFormatVersion: '2015-09-01'
+Description: NaLog Agent — DashVector free-trial cluster (Singapore)
+Parameters:
+  ClusterName:
+    Type: String
+    Default: nalog-agent
+    AllowedPattern: '[-a-z0-9_]{3,32}'
+Resources:
+  Cluster:
+    Type: ALIYUN::DashVector::Cluster
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      ClusterType: Serverless
+      ReplicaCount: 1
+Outputs:
+  Endpoint:
+    Description: DashVector cluster HTTPS endpoint
+    Value:
+      Fn::GetAtt:
+        - Cluster
+        - Endpoint
+  InstanceId:
+    Description: DashVector cluster ID
+    Value:
+      Fn::GetAtt:
+        - Cluster
+        - InstanceId
+  ClusterName:
+    Description: DashVector cluster name
+    Value:
+      Fn::GetAtt:
+        - Cluster
+        - ClusterName
